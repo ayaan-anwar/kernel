@@ -21,6 +21,78 @@
 	chosen {
 		stdout-path = "serial0:115200n8";
 	};
+
+	emac0_phy_supply: regulator-emac0-phy {
+		compatible = "regulator-fixed";
+		regulator-name = "emac0-phy-pwr";
+		regulator-min-microvolt = <2500000>;
+		regulator-max-microvolt = <2500000>;
+		gpio = <&tlmm 66 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-0 = <&emac0_phy_pwr_default>;
+		pinctrl-names = "default";
+	};
+
+	emac1_phy_supply: regulator-emac1-phy {
+		compatible = "regulator-fixed";
+		regulator-name = "emac1-phy-pwr";
+		regulator-min-microvolt = <2500000>;
+		regulator-max-microvolt = <2500000>;
+		gpio = <&tlmm 53 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-0 = <&emac1_phy_pwr_default>;
+		pinctrl-names = "default";
+	};
+};
+
+&ethernet0 {
+	phy-handle = <&ethphy0>;
+	phy-mode = "rgmii-id";
+
+	pinctrl-0 = <&ethernet0_default>;
+	pinctrl-names = "default";
+
+	mdio {
+		compatible = "snps,dwmac-mdio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		ethphy0: ethernet-phy@7 {
+			compatible = "ethernet-phy-id2000.a231";
+			reg = <7>;
+			reset-gpios = <&tlmm 135 GPIO_ACTIVE_LOW>;
+			reset-assert-us = <10000>;
+			reset-deassert-us = <50000>;
+			vdda2p5-supply = <&emac0_phy_supply>;
+		};
+	};
+
+	status = "okay";
+};
+
+&ethernet1 {
+	phy-handle = <&ethphy1>;
+	phy-mode = "rgmii-id";
+
+	pinctrl-0 = <&ethernet1_default>;
+	pinctrl-names = "default";
+
+	mdio {
+		compatible = "snps,dwmac-mdio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		ethphy1: ethernet-phy@7 {
+			compatible = "ethernet-phy-id2000.a231";
+			reg = <7>;
+			reset-gpios = <&tlmm 151 GPIO_ACTIVE_LOW>;
+			reset-assert-us = <10000>;
+			reset-deassert-us = <50000>;
+			vdda2p5-supply = <&emac1_phy_supply>;
+		};
+	};
+
+	status = "okay";
 };
 
 &remoteproc_cdsp {
@@ -56,4 +128,48 @@
 	no-sd;
 
 	status = "okay";
+};
+
+&tlmm {
+	/* EMAC1 RGMII pins are IQS-specific (gpio137-150). */
+	ethernet1_default: ethernet1-default-state {
+		rgmii-rx-pins {
+			pins = "gpio137", "gpio138", "gpio139",
+			       "gpio140", "gpio141", "gpio142";
+			function = "rgmii";
+			drive-strength = <16>;
+			bias-disable;
+		};
+
+		rgmii-tx-pins {
+			pins = "gpio143", "gpio144", "gpio145",
+			       "gpio146", "gpio147", "gpio148";
+			function = "rgmii";
+			drive-strength = <16>;
+			bias-pull-up;
+		};
+
+		rgmii-mdio-pins {
+			pins = "gpio149", "gpio150";
+			function = "rgmii";
+			drive-strength = <16>;
+			bias-pull-up;
+		};
+	};
+
+	emac0_phy_pwr_default: emac0-phy-pwr-default-state {
+		pins = "gpio66";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-low;
+	};
+
+	emac1_phy_pwr_default: emac1-phy-pwr-default-state {
+		pins = "gpio53";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-low;
+	};
 };
