@@ -15,6 +15,17 @@
 		serial1 = &uart8;
 	};
 
+	emac0_phy_supply: regulator-emac0-phy {
+		compatible = "regulator-fixed";
+		regulator-name = "emac0-phy-pwr";
+		regulator-min-microvolt = <2500000>;
+		regulator-max-microvolt = <2500000>;
+		gpio = <&tlmm 149 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-0 = <&emac0_phy_pwr_default>;
+		pinctrl-names = "default";
+	};
+
 	gpio-keys {
 		compatible = "gpio-keys";
 		label = "gpio-keys";
@@ -195,12 +206,45 @@
 	};
 };
 
+&ethernet0 {
+	phy-handle = <&ethphy0>;
+	phy-mode = "rgmii-id";
+
+	pinctrl-0 = <&ethernet0_default>;
+	pinctrl-names = "default";
+
+	mdio {
+		compatible = "snps,dwmac-mdio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		ethphy0: ethernet-phy@7 {
+			compatible = "ethernet-phy-id2000.a231";
+			reg = <7>;
+			reset-gpios = <&tlmm 135 GPIO_ACTIVE_LOW>;
+			reset-assert-us = <10000>;
+			reset-deassert-us = <50000>;
+			vdda2p5-supply = <&emac0_phy_supply>;
+		};
+	};
+
+	status = "okay";
+};
+
 &tlmm {
 	gpio-reserved-ranges = <6 4>, /* Fingerprint SPI */
 			       <14 4>, /* eSE SPI */
 			       <30 2>, /* NFC SPI */
 			       <138 1>, /* NFC Secure IO */
 			       <155 11>; /* eMMC Boot */
+
+	emac0_phy_pwr_default: emac0-phy-pwr-default-state {
+		pins = "gpio149";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-low;
+	};
 
 	sw_ctrl_default: sw-ctrl-default-state {
 		pins = "gpio88";
