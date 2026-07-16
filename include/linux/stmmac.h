@@ -215,6 +215,8 @@ enum dwmac_core_type {
 struct mac_device_info;
 
 struct plat_stmmacenet_data {
+	u32 snps_id;
+	u32 dev_id;
 	enum dwmac_core_type core_type;
 	int bus_id;
 	int phy_addr;
