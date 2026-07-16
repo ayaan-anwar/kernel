@@ -287,6 +287,24 @@ static const struct stmmac_hwif_entry {
 		.mmc = &dwxgmac_mmc_ops,
 		.est = &dwmac510_est_ops,
 		.setup = dwxlgmac2_setup,
+	}, {
+		.core_type = DWMAC_CORE_XGMAC,
+		.min_id = DW25GMAC_CORE_4_00,
+		.dev_id = DW25GMAC_ID,
+		.regs = {
+			.ptp_off = PTP_XGMAC_OFFSET,
+			.mmc_off = MMC_XGMAC_OFFSET,
+		},
+		.desc = &dwxgmac210_desc_ops,
+		.dma = &dw25gmac400_dma_ops,
+		.mac = &dwxgmac210_ops,
+		.hwtimestamp = &stmmac_ptp,
+		.ptp = &stmmac_ptp_clock_ops,
+		.mode = NULL,
+		.tc = &dwmac510_tc_ops,
+		.mmc = &dwxgmac_mmc_ops,
+		.setup = dw25gmac_setup,
+		.quirks = NULL,
 	},
 };
 
@@ -324,6 +342,16 @@ int stmmac_hwif_init(struct stmmac_priv *priv)
 	int ret;
 
 	stmmac_get_version(priv, &version);
+
+	/* Allow glue drivers to override the synopsys_id and dev_id
+	 * read from HW. This is needed when the MAC.VERSION CSR reports
+	 * a legacy ID but the IP is actually a newer variant (e.g. DW25GMAC
+	 * early adopter devices that report DWXGMAC_ID in HW).
+	 */
+	if (priv->plat->snps_id && priv->plat->dev_id) {
+		version.snpsver = priv->plat->snps_id;
+		version.dev_id = priv->plat->dev_id;
+	}
 
 	/* Save ID for later use */
 	priv->synopsys_id = version.snpsver;
