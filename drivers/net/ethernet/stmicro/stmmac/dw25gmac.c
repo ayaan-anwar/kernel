@@ -103,22 +103,29 @@ void dw25gmac_dma_init_tx_chan(struct stmmac_priv *priv,
 	u32 value;
 	u32 tc;
 
-	/* Descriptor cache size and prefetch threshold size */
+	/* Descriptor cache size and prefetch threshold size.
+	 * Use dma_cfg values when set by the platform; otherwise fall back to
+	 * reasonable defaults (256-byte cache, half-size prefetch threshold).
+	 */
 	value = rd_dma_ch_ind(ioaddr, MODE_TXDESCCTRL, chan);
 	value &= ~XXVGMAC_TXDCSZ;
 	value |= FIELD_PREP(XXVGMAC_TXDCSZ,
-			    XXVGMAC_TXDCSZ_256BYTES);
+			    dma_cfg->txdcsz ? dma_cfg->txdcsz
+					    : XXVGMAC_TXDCSZ_256BYTES);
 	value &= ~XXVGMAC_TDPS;
-	value |= FIELD_PREP(XXVGMAC_TDPS, XXVGMAC_TDPS_HALF);
+	value |= FIELD_PREP(XXVGMAC_TDPS,
+			    dma_cfg->tdps ? dma_cfg->tdps : XXVGMAC_TDPS_HALF);
 	wr_dma_ch_ind(ioaddr, MODE_TXDESCCTRL, chan, value);
 
 	/* Use one-to-one mapping between VDMA, TC, and PDMA. */
 	tc = chan;
 
-	/* 1-to-1 PDMA to TC mapping */
+	/* 1-to-1 PDMA to TC mapping; optionally set AXI outstanding reads */
 	value = rd_dma_ch_ind(ioaddr, MODE_TXEXTCFG, chan);
 	value &= ~XXVGMAC_TP2TCMP;
 	value |= FIELD_PREP(XXVGMAC_TP2TCMP, tc);
+	if (dma_cfg->orrq)
+		value |= FIELD_PREP(XXVGMAC_ORRQ, dma_cfg->orrq);
 	wr_dma_ch_ind(ioaddr, MODE_TXEXTCFG, chan, value);
 
 	/* 1-to-1 VDMA to TC mapping */
@@ -142,13 +149,18 @@ void dw25gmac_dma_init_rx_chan(struct stmmac_priv *priv,
 	u32 value;
 	u32 tc;
 
-	/* Descriptor cache size and prefetch threshold size */
+	/* Descriptor cache size and prefetch threshold size.
+	 * Use dma_cfg values when set by the platform; otherwise fall back to
+	 * reasonable defaults (256-byte cache, half-size prefetch threshold).
+	 */
 	value = rd_dma_ch_ind(ioaddr, MODE_RXDESCCTRL, chan);
 	value &= ~XXVGMAC_RXDCSZ;
 	value |= FIELD_PREP(XXVGMAC_RXDCSZ,
-			    XXVGMAC_RXDCSZ_256BYTES);
+			    dma_cfg->rxdcsz ? dma_cfg->rxdcsz
+					    : XXVGMAC_RXDCSZ_256BYTES);
 	value &= ~XXVGMAC_RDPS;
-	value |= FIELD_PREP(XXVGMAC_RDPS, XXVGMAC_RDPS_HALF);
+	value |= FIELD_PREP(XXVGMAC_RDPS,
+			    dma_cfg->rdps ? dma_cfg->rdps : XXVGMAC_RDPS_HALF);
 	wr_dma_ch_ind(ioaddr, MODE_RXDESCCTRL, chan, value);
 
 	/* Use one-to-one mapping between VDMA, TC, and PDMA. */
@@ -208,6 +220,8 @@ void dw25gmac_dma_map_rx_offline_chan(struct stmmac_priv *priv,
 	value = rd_dma_ch_ind(ioaddr, MODE_RXEXTCFG, chan);
 	value &= ~XXVGMAC_RP2TCMP;
 	value |= FIELD_PREP(XXVGMAC_RP2TCMP, tc);
+	if (dma_cfg->owrq)
+		value |= FIELD_PREP(XXVGMAC_OWRQ, dma_cfg->owrq);
 	wr_dma_ch_ind(ioaddr, MODE_RXEXTCFG, chan, value);
 
 	/* VDMA to TC mapping for offline channel */
