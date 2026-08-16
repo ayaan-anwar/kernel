@@ -5,6 +5,9 @@
 #ifndef __STMMAC_DW25GMAC_H__
 #define __STMMAC_DW25GMAC_H__
 
+/* DMA_MODE register bits specific to DW25GMAC */
+#define XXVGMAC_HMIC			BIT(17)	/* Hardware Memory Init Complete */
+
 /* Hardware features */
 #define XXVGMAC_HWFEAT_VDMA_RXCNT	GENMASK(16, 12)
 #define XXVGMAC_HWFEAT_VDMA_TXCNT	GENMASK(22, 18)
@@ -79,7 +82,7 @@ enum dma_ch_ind_modes {
 u32 dw25gmac_decode_vdma_count(u32 regval);
 
 void dw25gmac_dma_init(void __iomem *ioaddr,
-		       struct stmmac_dma_cfg *dma_cfg, int atds);
+		       struct stmmac_dma_cfg *dma_cfg);
 
 void dw25gmac_dma_init_tx_chan(struct stmmac_priv *priv,
 			       void __iomem *ioaddr,
