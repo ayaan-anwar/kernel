@@ -124,6 +124,22 @@ struct stmmac_dma_cfg {
 	bool multi_msi_en;
 	/* atds: stmmac core internal */
 	bool atds;
+	/* 25G HDMA AXI outstanding request limits.
+	 * orrq: outstanding read requests per TX PDMA channel (ORRQ field)
+	 * owrq: outstanding write requests per RX PDMA channel (OWRQ field)
+	 * Valid range 0-63; 0 means leave hardware default.
+	 */
+	int orrq;
+	int owrq;
+	/* 25G HDMA per-channel descriptor cache and prefetch thresholds.
+	 * tdps/rdps: TX/RX descriptor prefetch threshold size (encoded value)
+	 * txdcsz/rxdcsz: TX/RX descriptor cache size (encoded value)
+	 * See XXVGMAC_TDPS_* / XXVGMAC_TXDCSZ_* constants in dw25gmac.h.
+	 */
+	u32 tdps;
+	u32 rdps;
+	u32 txdcsz;
+	u32 rxdcsz;
 };
 
 #define AXI_BLEN	7
@@ -186,6 +202,18 @@ struct dwmac4_addrs {
 	u32 mtl_high_cred_offset;
 	u32 mtl_low_cred;
 	u32 mtl_low_cred_offset;
+};
+
+/* Address layout for the Broadcom XXVGMAC (25G/10G) DMA */
+struct dwxgmac_addrs {
+	u32 dma_even_chan_base;
+	u32 dma_odd_chan_base;
+	u32 dma_chan_offset;
+	u32 mtl_chan_base;
+	u32 mtl_chan_offset;
+	u32 timestamp_base;
+	u32 pps_base;
+	u32 pps_offset;
 };
 
 enum dwmac_core_type {
@@ -358,6 +386,8 @@ struct plat_stmmacenet_data {
 	int msi_rx_base_vec;
 	int msi_tx_base_vec;
 	const struct dwmac4_addrs *dwmac4_addrs;
+	const struct dwxgmac_addrs *dwxgmac_addrs;
+	bool has_hdma;
 	unsigned int flags;
 	struct stmmac_dma_cfg __dma_cfg;
 };
