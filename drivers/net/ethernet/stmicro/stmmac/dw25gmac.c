@@ -2,6 +2,7 @@
 /*
  * Copyright (c) 2024 Broadcom Corporation
  */
+#include <linux/iopoll.h>
 #include "stmmac.h"
 #include "dwxgmac2.h"
 #include "dw25gmac.h"
@@ -44,12 +45,21 @@ static void wr_dma_ch_ind(void __iomem *ioaddr, u8 mode, u32 channel, u32 val)
 }
 
 void dw25gmac_dma_init(void __iomem *ioaddr,
-		       struct stmmac_dma_cfg *dma_cfg, int atds)
+		       struct stmmac_dma_cfg *dma_cfg)
 {
 	u32 tx_pdmas, rx_pdmas;
 	u32 hw_cap;
 	u32 value;
 	u32 i;
+
+	/*
+	 * The 25GMAC initialises its internal SPRAM (which holds the per-VDMA
+	 * register file) after reset. Poll HMIC until the hardware signals that
+	 * the memory init is complete before touching any DMA configuration.
+	 */
+	if (readl_poll_timeout(ioaddr + XGMAC_DMA_MODE, value,
+			       value & XXVGMAC_HMIC, 10, 200000))
+		pr_warn("dw25gmac: timeout waiting for HMIC\n");
 
 	value = readl(ioaddr + XGMAC_DMA_SYSBUS_MODE);
 	value &= ~(XGMAC_AAL | XGMAC_EAME);
