@@ -7,7 +7,7 @@
 #define __LINUX_PCS_XPCS_REGMAP_H
 
 #include <linux/regmap.h>
-#include <linux/pcs/xpcs.h>
+#include <linux/pcs/pcs-xpcs.h>
 
 /**
  * struct xpcs_regmap_config - Configuration for regmap-based XPCS
