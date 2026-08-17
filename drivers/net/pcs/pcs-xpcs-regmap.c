@@ -202,6 +202,7 @@ struct dw_xpcs *devm_xpcs_regmap_register(struct device *dev,
 	pxpcs->bus->write = xpcs_regmap_write_c22;
 	pxpcs->bus->read_c45 = xpcs_regmap_read_c45;
 	pxpcs->bus->write_c45 = xpcs_regmap_write_c45;
+	pxpcs->bus->phy_mask = ~0;	/* no PHY scanning — XPCS is not a PHY bus */
 	pxpcs->bus->priv = pxpcs;
 	pxpcs->bus->parent = dev;
 
