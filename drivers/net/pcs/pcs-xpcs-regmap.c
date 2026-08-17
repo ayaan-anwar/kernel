@@ -162,6 +162,14 @@ static void xpcs_regmap_unregister(void *data)
 	xpcs_destroy(data);
 }
 
+static void xpcs_regmap_unregister_with_mdio(void *data)
+{
+	struct dw_xpcs *xpcs = data;
+
+	mdio_device_remove(xpcs->mdiodev);
+	xpcs_destroy(xpcs);
+}
+
 static atomic_t xpcs_regmap_id = ATOMIC_INIT(0);
 
 /**
@@ -218,10 +226,32 @@ struct dw_xpcs *devm_xpcs_regmap_register(struct device *dev,
 	 * Transfer the caller's firmware node to the mdio_device so that
 	 * xpcs_create_fwnode() (called from stmmac_mdio.c when parsing
 	 * "pcs-handle") can locate this instance by fwnode.
+	 *
+	 * Set fwnode BEFORE device_add() so bus_find_device_by_fwnode()
+	 * sees the correct fwnode from the moment the device appears on the bus.
 	 */
 	device_set_node(&xpcs->mdiodev->dev, fwnode_handle_get(dev_fwnode(dev)));
 
-	ret = devm_add_action_or_reset(dev, xpcs_regmap_unregister, xpcs);
+	/*
+	 * Register the mdiodev on the MDIO bus so that fwnode_mdio_find_device()
+	 * can locate it.  mdio_device_create() only calls device_initialize();
+	 * bus_find_device_by_fwnode() only iterates devices added via device_add().
+	 */
+	ret = mdio_device_register(xpcs->mdiodev);
+	if (ret) {
+		xpcs_destroy(xpcs);
+		return ERR_PTR(ret);
+	}
+
+	dev_info(dev, "XPCS mdiodev registered (fwnode=%s)\n",
+		 dev_name(&xpcs->mdiodev->dev));
+
+	/*
+	 * Use the combined cleanup function so mdio_device_remove() runs before
+	 * xpcs_destroy() — device must be removed from the bus before the last
+	 * mdiodev reference is dropped.
+	 */
+	ret = devm_add_action_or_reset(dev, xpcs_regmap_unregister_with_mdio, xpcs);
 	if (ret)
 		return ERR_PTR(ret);
 

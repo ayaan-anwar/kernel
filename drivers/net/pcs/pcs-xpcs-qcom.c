@@ -121,9 +121,13 @@ static int qcom_xpcs_probe(struct platform_device *pdev)
 	struct regmap *regmap;
 	struct dw_xpcs *xpcs;
 
+	dev_info(dev, "probing QCOM XPCS\n");
+
 	base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
+
+	dev_info(dev, "XPCS APB mapped at %px\n", base);
 
 	/*
 	 * Create a custom regmap that translates (dev << 16) | reg addresses
@@ -138,6 +142,8 @@ static int qcom_xpcs_probe(struct platform_device *pdev)
 	if (IS_ERR(xpcs))
 		return dev_err_probe(dev, PTR_ERR(xpcs), "failed to register XPCS\n");
 
+	dev_info(dev, "XPCS registered, id=0x%08x\n", xpcs->mdiodev->addr);
+
 	/*
 	 * Enable RPCS and XGXS clocks listed in the DT node.  Use
 	 * devm_clk_bulk_get_all() so this is a no-op on boards that omit them.
@@ -147,12 +153,13 @@ static int qcom_xpcs_probe(struct platform_device *pdev)
 		int n = devm_clk_bulk_get_all(dev, &clks);
 
 		if (n < 0)
-			return n;
+			return dev_err_probe(dev, n, "failed to get clocks\n");
+		dev_info(dev, "enabling %d XPCS clocks\n", n);
 		if (n > 0) {
 			int ret = clk_bulk_prepare_enable(n, clks);
 
 			if (ret)
-				return ret;
+				return dev_err_probe(dev, ret, "failed to enable clocks\n");
 		}
 	}
 
@@ -160,6 +167,7 @@ static int qcom_xpcs_probe(struct platform_device *pdev)
 
 	pm_runtime_enable(dev);
 
+	dev_info(dev, "QCOM XPCS probe complete\n");
 	return 0;
 }
 
