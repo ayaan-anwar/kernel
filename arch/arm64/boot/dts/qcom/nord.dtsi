@@ -2326,6 +2326,38 @@
 			#interrupt-cells = <2>;
 			gpio-ranges = <&tlmm 0 0 181>;
 			wakeup-parent = <&pdc>;
+
+			emac0_default: emac0-default-state {
+				emac0-mdc-pins {
+					pins = "gpio47";
+					function = "emac0_mdc";
+					drive-strength = <16>;
+					bias-pull-up;
+				};
+
+				emac0-mdio-pins {
+					pins = "gpio48";
+					function = "emac0_mdio";
+					drive-strength = <16>;
+					bias-pull-up;
+				};
+			};
+
+			emac1_default: emac1-default-state {
+				emac1-mdc-pins {
+					pins = "gpio49";
+					function = "emac1_mdc";
+					drive-strength = <16>;
+					bias-pull-up;
+				};
+
+				emac1-mdio-pins {
+					pins = "gpio50";
+					function = "emac1_mdio";
+					drive-strength = <16>;
+					bias-pull-up;
+				};
+			};
 		};
 
 		ctcu@10001000 {
