@@ -1055,6 +1055,31 @@ static int qcom_ethqos_nord_dma_reset(struct stmmac_priv *priv)
 		return -ENODEV;
 	}
 
+	if (ethqos->serdes_phy) {
+		/*
+		 * Force SerDes PLL re-calibration.  stmmac_open calls
+		 * stmmac_legacy_serdes_power_up() before __stmmac_open, so
+		 * power_count is already 1 and phy_power_on() alone would be
+		 * a no-op.  Use legacy_serdes_is_powered as the guard: power
+		 * off first (power_count 1→0, triggers hardware power-off),
+		 * then back on (power_count 0→1, triggers PLL calibration).
+		 * Without a live SerDes Tx clock the EMAC wrapper Tx→Rx
+		 * loopback has nothing to route as clk_rx_i, making all EMAC
+		 * DMA register accesses fault with NOC SLVERR.
+		 */
+		if (priv->legacy_serdes_is_powered)
+			phy_power_off(ethqos->serdes_phy);
+		phy_power_on(ethqos->serdes_phy);
+		/*
+		 * Configure SerDes for 10G USXGMII.  phy_set_speed is
+		 * unconditional (not refcounted) and always applies the
+		 * hardware configuration, ensuring the PLL is locked at the
+		 * right frequency before we try to route it as clk_rx_i.
+		 */
+		phy_set_speed(ethqos->serdes_phy, SPEED_10000);
+		priv->legacy_serdes_is_powered = true;
+	}
+
 	/* Re-arm EMAC wrapper Tx→Rx clock routing in case GDSC reset the registers */
 	qcom_ethqos_set_sgmii_loopback(ethqos, true);
 	ethqos_set_func_clk_en(ethqos);
@@ -1066,8 +1091,8 @@ static int qcom_ethqos_nord_dma_reset(struct stmmac_priv *priv)
 	if (ethqos->xpcs_base) {
 		u32 sr_mii_ctrl = readl(ethqos->xpcs_base + QCOM_XPCS_SR_MII_CTRL_OFF);
 
-		dev_dbg(dev, "SR_MII_CTRL @ 0x%px = 0x%08x\n",
-			ethqos->xpcs_base + QCOM_XPCS_SR_MII_CTRL_OFF, sr_mii_ctrl);
+		dev_info(dev, "SR_MII_CTRL(0x1A18000) = 0x%08x (bit14=%u)\n",
+			 sr_mii_ctrl, !!(sr_mii_ctrl & BIT(14)));
 		if (!(sr_mii_ctrl & BIT(14))) {
 			dev_err(dev,
 				"XPCS SR_MII_CTRL=0x%08x: bit 14 (loopback) not set; "
@@ -1077,7 +1102,8 @@ static int qcom_ethqos_nord_dma_reset(struct stmmac_priv *priv)
 		}
 	}
 
-	/* Allow the EMAC wrapper clock path to propagate before DMA access */
+	/* Allow the SerDes + wrapper clock path to propagate before DMA access */
+	dev_info(dev, "XPCS loopback confirmed; attempting XGMAC DMA reset\n");
 	udelay(50);
 
 	value = readl(ioaddr + XGMAC_DMA_MODE);
