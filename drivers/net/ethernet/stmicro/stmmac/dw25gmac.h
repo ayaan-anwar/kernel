@@ -6,6 +6,7 @@
 #define __STMMAC_DW25GMAC_H__
 
 /* DMA_MODE register bits specific to DW25GMAC */
+#define XXVGMAC_DSCB			BIT(16)	/* Descriptor Cache Size Computation Busy */
 #define XXVGMAC_HMIC			BIT(17)	/* Hardware Memory Init Complete */
 
 /* Hardware features */
@@ -41,6 +42,7 @@ enum dma_ch_ind_modes {
 #define XXVGMAC_RPBLX8_MODE		BIT(19)
 #define XXVGMAC_RP2TCMP			GENMASK(18, 16)
 #define XXVGMAC_OWRQ			GENMASK(13, 8)
+#define XXVGMAC_RXPEN			BIT(31)		/* RX PDMA enable (in RXEXTCFG) */
 
 /* Tx Descriptor control */
 #define XXVGMAC_TXDCSZ			GENMASK(2, 0)

@@ -409,7 +409,13 @@ int stmmac_hwif_init(struct stmmac_priv *priv)
 
 	priv->hw = mac;
 	priv->fpe_cfg.reg = entry->regs.fpe_reg;
-	priv->ptpaddr = priv->ioaddr + entry->regs.ptp_off;
+	{
+		const struct dwxgmac_addrs *dwxgmac_addrs = priv->plat->dwxgmac_addrs;
+
+		priv->ptpaddr = priv->ioaddr +
+			(dwxgmac_addrs ? dwxgmac_addrs->timestamp_base
+				       : entry->regs.ptp_off);
+	}
 	priv->mmcaddr = priv->ioaddr + entry->regs.mmc_off;
 	memcpy(&priv->ptp_clock_ops, entry->ptp,
 	       sizeof(struct ptp_clock_info));
