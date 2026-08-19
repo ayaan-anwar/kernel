@@ -7,6 +7,7 @@
 #include <linux/platform_device.h>
 #include <linux/phy.h>
 #include <linux/phy/phy.h>
+#include <linux/interconnect.h>
 
 #include "stmmac.h"
 #include "stmmac_platform.h"
@@ -165,6 +166,10 @@ struct qcom_ethqos {
 
 	struct clk_bulk_data noc_clks[ETHQOS_MAX_NOC_CLKS];
 	int num_noc_clks;
+
+	struct icc_path *icc_cpu_mac;
+	struct icc_path *icc_mac_mem;
+	struct icc_path *icc_ahb2phy;
 };
 
 static u32 rgmii_readl(struct qcom_ethqos *ethqos, unsigned int offset)
@@ -1097,6 +1102,39 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	if (IS_ERR(ethqos->serdes_phy))
 		return dev_err_probe(dev, PTR_ERR(ethqos->serdes_phy),
 				     "Failed to get serdes phy\n");
+
+	ethqos->icc_cpu_mac = devm_of_icc_get(dev, "cpu-mac");
+	if (IS_ERR(ethqos->icc_cpu_mac))
+		return dev_err_probe(dev, PTR_ERR(ethqos->icc_cpu_mac),
+				     "Failed to get cpu-mac interconnect\n");
+
+	ethqos->icc_mac_mem = devm_of_icc_get(dev, "mac-mem");
+	if (IS_ERR(ethqos->icc_mac_mem))
+		return dev_err_probe(dev, PTR_ERR(ethqos->icc_mac_mem),
+				     "Failed to get mac-mem interconnect\n");
+
+	ethqos->icc_ahb2phy = devm_of_icc_get(dev, "ahb2phy");
+	if (IS_ERR(ethqos->icc_ahb2phy))
+		return dev_err_probe(dev, PTR_ERR(ethqos->icc_ahb2phy),
+				     "Failed to get ahb2phy interconnect\n");
+
+	if (ethqos->icc_cpu_mac) {
+		ret = icc_set_bw(ethqos->icc_cpu_mac, 0, INT_MAX);
+		if (ret)
+			dev_warn(dev, "cpu-mac icc_set_bw failed: %d\n", ret);
+	}
+
+	if (ethqos->icc_mac_mem) {
+		ret = icc_set_bw(ethqos->icc_mac_mem, 0, INT_MAX);
+		if (ret)
+			dev_warn(dev, "mac-mem icc_set_bw failed: %d\n", ret);
+	}
+
+	if (ethqos->icc_ahb2phy) {
+		ret = icc_set_bw(ethqos->icc_ahb2phy, 0, INT_MAX);
+		if (ret)
+			dev_warn(dev, "ahb2phy icc_set_bw failed: %d\n", ret);
+	}
 
 	ethqos_set_clk_tx_rate(ethqos, NULL, plat_dat->phy_interface,
 			       SPEED_1000);
