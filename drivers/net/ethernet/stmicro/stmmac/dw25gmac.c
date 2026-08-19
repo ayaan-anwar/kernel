@@ -44,6 +44,19 @@ static void wr_dma_ch_ind(void __iomem *ioaddr, u8 mode, u32 channel, u32 val)
 	writel(reg_val, ioaddr + XXVGMAC_DMA_CH_IND_CONTROL);
 }
 
+static void dw25gmac_desc_cache_compute(void __iomem *ioaddr)
+{
+	u32 value;
+
+	value = readl(ioaddr + XGMAC_DMA_MODE);
+	value |= XXVGMAC_DSCB;
+	writel(value, ioaddr + XGMAC_DMA_MODE);
+
+	if (readl_poll_timeout(ioaddr + XGMAC_DMA_MODE, value,
+			       !(value & XXVGMAC_DSCB), 10, 200))
+		pr_warn("dw25gmac: timeout waiting for DSCB completion\n");
+}
+
 void dw25gmac_dma_init(void __iomem *ioaddr,
 		       struct stmmac_dma_cfg *dma_cfg)
 {
@@ -99,6 +112,7 @@ void dw25gmac_dma_init_tx_chan(struct stmmac_priv *priv,
 			       struct stmmac_dma_cfg *dma_cfg,
 			       dma_addr_t dma_addr, u32 chan)
 {
+	const struct dwxgmac_addrs *addrs = priv->plat->dwxgmac_addrs;
 	u32 value;
 	u32 tc;
 
@@ -121,15 +135,15 @@ void dw25gmac_dma_init_tx_chan(struct stmmac_priv *priv,
 	wr_dma_ch_ind(ioaddr, MODE_TXEXTCFG, chan, value);
 
 	/* 1-to-1 VDMA to TC mapping */
-	value = readl(ioaddr + XGMAC_DMA_CH_TX_CONTROL(chan));
+	value = readl(ioaddr + XGMAC_DMA_CH_TX_CONTROL(addrs, chan));
 	value &= ~XXVGMAC_TVDMA2TCMP;
 	value |= FIELD_PREP(XXVGMAC_TVDMA2TCMP, tc);
-	writel(value, ioaddr + XGMAC_DMA_CH_TX_CONTROL(chan));
+	writel(value, ioaddr + XGMAC_DMA_CH_TX_CONTROL(addrs, chan));
 
 	writel(upper_32_bits(dma_addr),
-	       ioaddr + XGMAC_DMA_CH_TxDESC_HADDR(chan));
+	       ioaddr + XGMAC_DMA_CH_TxDESC_HADDR(addrs, chan));
 	writel(lower_32_bits(dma_addr),
-	       ioaddr + XGMAC_DMA_CH_TxDESC_LADDR(chan));
+	       ioaddr + XGMAC_DMA_CH_TxDESC_LADDR(addrs, chan));
 }
 
 void dw25gmac_dma_init_rx_chan(struct stmmac_priv *priv,
@@ -137,6 +151,7 @@ void dw25gmac_dma_init_rx_chan(struct stmmac_priv *priv,
 			       struct stmmac_dma_cfg *dma_cfg,
 			       dma_addr_t dma_addr, u32 chan)
 {
+	const struct dwxgmac_addrs *addrs = priv->plat->dwxgmac_addrs;
 	u32 value;
 	u32 tc;
 
@@ -152,20 +167,29 @@ void dw25gmac_dma_init_rx_chan(struct stmmac_priv *priv,
 	/* Use one-to-one mapping between VDMA, TC, and PDMA. */
 	tc = chan;
 
-	/* 1-to-1 PDMA to TC mapping */
+	/* 1-to-1 PDMA to TC mapping; enable RX PDMA; optionally set AXI outstanding writes */
 	value = rd_dma_ch_ind(ioaddr, MODE_RXEXTCFG, chan);
 	value &= ~XXVGMAC_RP2TCMP;
 	value |= FIELD_PREP(XXVGMAC_RP2TCMP, tc);
+	if (dma_cfg->owrq)
+		value |= FIELD_PREP(XXVGMAC_OWRQ, dma_cfg->owrq);
+	value |= XXVGMAC_RXPEN;
 	wr_dma_ch_ind(ioaddr, MODE_RXEXTCFG, chan, value);
 
 	/* 1-to-1 VDMA to TC mapping */
-	value = readl(ioaddr + XGMAC_DMA_CH_RX_CONTROL(chan));
+	value = readl(ioaddr + XGMAC_DMA_CH_RX_CONTROL(addrs, chan));
 	value &= ~XXVGMAC_RVDMA2TCMP;
 	value |= FIELD_PREP(XXVGMAC_RVDMA2TCMP, tc);
-	writel(value, ioaddr + XGMAC_DMA_CH_RX_CONTROL(chan));
+	writel(value, ioaddr + XGMAC_DMA_CH_RX_CONTROL(addrs, chan));
 
 	writel(upper_32_bits(dma_addr),
-	       ioaddr + XGMAC_DMA_CH_RxDESC_HADDR(chan));
+	       ioaddr + XGMAC_DMA_CH_RxDESC_HADDR(addrs, chan));
 	writel(lower_32_bits(dma_addr),
-	       ioaddr + XGMAC_DMA_CH_RxDESC_LADDR(chan));
+	       ioaddr + XGMAC_DMA_CH_RxDESC_LADDR(addrs, chan));
+
+	/* Trigger descriptor cache base address computation (HPG §3.8.2 steps 9-10).
+	 * Must fire after all TxDescCtrl/RxDescCtrl indirect writes for this channel.
+	 * Ideally called once after all channels; calling per RX channel is safe.
+	 */
+	dw25gmac_desc_cache_compute(ioaddr);
 }
