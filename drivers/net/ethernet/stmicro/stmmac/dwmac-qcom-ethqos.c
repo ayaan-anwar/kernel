@@ -4,6 +4,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_net.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/phy.h>
 #include <linux/phy/phy.h>
@@ -902,6 +903,7 @@ static int ethqos_mac_finish_serdes(struct net_device *ndev, void *priv,
 	struct qcom_ethqos *ethqos = priv;
 
 	qcom_ethqos_set_sgmii_loopback(ethqos, false);
+	dev_info(&ethqos->pdev->dev, "SGMII wrapper loopback disabled at mac_finish\n");
 
 	if (ethqos->serdes_phy && ethqos->speed)
 		return phy_set_speed(ethqos->serdes_phy, ethqos->speed);
@@ -1100,10 +1102,10 @@ static int qcom_ethqos_nord_dma_reset(struct stmmac_priv *priv)
 				sr_mii_ctrl);
 			return -EAGAIN;
 		}
+		dev_info(dev, "XPCS loopback confirmed; attempting XGMAC DMA reset\n");
+	} else {
+		dev_info(dev, "XPCS base not mapped; skipping bit-14 check, attempting XGMAC DMA reset\n");
 	}
-
-	/* Allow the SerDes + wrapper clock path to propagate before DMA access */
-	dev_info(dev, "XPCS loopback confirmed; attempting XGMAC DMA reset\n");
 	udelay(50);
 
 	value = readl(ioaddr + XGMAC_DMA_MODE);
@@ -1173,18 +1175,21 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	 * Map the XPCS APB window via the pcs-handle phandle so that
 	 * qcom_ethqos_nord_dma_reset can read SR_MII_CTRL (xpcs_base+0x4000)
 	 * directly without going through the MDIO translation stack.
+	 * Use devm_ioremap (not devm_ioremap_resource / devm_of_iomap) to avoid
+	 * -EBUSY: pcs-xpcs-qcom already holds an exclusive request on this region.
 	 */
 	{
 		struct device_node *xn = of_parse_phandle(dev->of_node, "pcs-handle", 0);
 
 		if (xn) {
-			ethqos->xpcs_base = devm_of_iomap(dev, xn, 0, NULL);
+			struct resource res;
+
+			if (!of_address_to_resource(xn, 0, &res))
+				ethqos->xpcs_base = devm_ioremap(dev, res.start,
+								 resource_size(&res));
 			of_node_put(xn);
-			if (IS_ERR(ethqos->xpcs_base)) {
-				dev_warn(dev, "failed to map XPCS base: %ld\n",
-					 PTR_ERR(ethqos->xpcs_base));
-				ethqos->xpcs_base = NULL;
-			}
+			if (!ethqos->xpcs_base)
+				dev_warn(dev, "failed to ioremap XPCS base\n");
 		}
 	}
 

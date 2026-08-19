@@ -1411,8 +1411,10 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 	struct dw_xpcs *xpcs = phylink_pcs_to_xpcs(pcs);
 
 	/* Disable Tx→Rx loopback clock; PHY/switch supplies Rx clocks by now */
-	if (pcs->rxc_always_on)
+	if (pcs->rxc_always_on) {
 		xpcs_loopback(xpcs, false);
+		dev_info(&xpcs->mdiodev->dev, "Tx→Rx loopback disabled at link-up\n");
+	}
 
 	switch (interface) {
 	case PHY_INTERFACE_MODE_USXGMII:
