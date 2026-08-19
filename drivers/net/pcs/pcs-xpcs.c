@@ -356,6 +356,24 @@ static int xpcs_read_fault_c73(struct dw_xpcs *xpcs,
 	return 0;
 }
 
+/*
+ * Route Tx clocks back to Rx so the MAC can access its configuration registers
+ * before a PHY or switch supplies real Rx clocks.  USXGMII_EN must be set
+ * first; the loopback path is only functional when the PCS is in USXGMII mode.
+ * Called from pcs_pre_init() (enable) and xpcs_link_up() (disable).
+ */
+static int xpcs_loopback(struct dw_xpcs *xpcs, bool on)
+{
+	int ret;
+
+	ret = xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, DW_USXGMII_EN);
+	if (ret < 0)
+		return ret;
+
+	return xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, BMCR_LOOPBACK,
+			   on ? BMCR_LOOPBACK : 0);
+}
+
 static void xpcs_link_up_usxgmii(struct dw_xpcs *xpcs, int speed)
 {
 	int ret, speed_sel;
@@ -1373,10 +1391,24 @@ static void xpcs_link_up_sgmii_1000basex(struct dw_xpcs *xpcs,
 			__func__, ERR_PTR(ret));
 }
 
+static int xpcs_pre_init(struct phylink_pcs *pcs)
+{
+	struct dw_xpcs *xpcs = phylink_pcs_to_xpcs(pcs);
+
+	if (!pcs->rxc_always_on)
+		return 0;
+
+	return xpcs_loopback(xpcs, true);
+}
+
 static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 			 phy_interface_t interface, int speed, int duplex)
 {
 	struct dw_xpcs *xpcs = phylink_pcs_to_xpcs(pcs);
+
+	/* Disable Tx→Rx loopback clock; PHY/switch supplies Rx clocks by now */
+	if (pcs->rxc_always_on)
+		xpcs_loopback(xpcs, false);
 
 	switch (interface) {
 	case PHY_INTERFACE_MODE_USXGMII:
@@ -1631,6 +1663,7 @@ static const struct phylink_pcs_ops xpcs_phylink_ops = {
 	.pcs_validate = xpcs_validate,
 	.pcs_inband_caps = xpcs_inband_caps,
 	.pcs_pre_config = xpcs_pre_config,
+	.pcs_pre_init = xpcs_pre_init,
 	.pcs_config = xpcs_config,
 	.pcs_get_state = xpcs_get_state,
 	.pcs_an_restart = xpcs_an_restart,

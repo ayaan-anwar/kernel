@@ -3654,7 +3654,10 @@ static int stmmac_hw_setup(struct net_device *dev)
 	int ret;
 
 	/* Make sure RX clock is enabled */
-	if (priv->hw->phylink_pcs)
+	if (priv->hw->xpcs)
+		phylink_pcs_pre_init(priv->phylink,
+				     xpcs_to_phylink_pcs(priv->hw->xpcs));
+	else if (priv->hw->phylink_pcs)
 		phylink_pcs_pre_init(priv->phylink, priv->hw->phylink_pcs);
 
 	/* Note that clk_rx_i must be running for reset to complete. This
