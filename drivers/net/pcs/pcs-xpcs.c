@@ -1394,11 +1394,15 @@ static void xpcs_link_up_sgmii_1000basex(struct dw_xpcs *xpcs,
 static int xpcs_pre_init(struct phylink_pcs *pcs)
 {
 	struct dw_xpcs *xpcs = phylink_pcs_to_xpcs(pcs);
+	int ret;
 
 	if (!pcs->rxc_always_on)
 		return 0;
 
-	return xpcs_loopback(xpcs, true);
+	ret = xpcs_loopback(xpcs, true);
+	if (!ret)
+		dev_info(&xpcs->mdiodev->dev, "Tx→Rx loopback enabled for MAC init\n");
+	return ret;
 }
 
 static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,

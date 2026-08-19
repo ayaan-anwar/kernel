@@ -1018,8 +1018,9 @@
 		clocks = <&segcc SE_GCC_EMAC0_RPCS_RX_CLK>,
 			 <&segcc SE_GCC_EMAC0_RPCS_TX_CLK>,
 			 <&segcc SE_GCC_EMAC0_XGXS_RX_CLK>,
-			 <&segcc SE_GCC_EMAC0_XGXS_TX_CLK>;
-		clock-names = "rpcs_rx", "rpcs_tx", "xgxs_rx", "xgxs_tx";
+			 <&segcc SE_GCC_EMAC0_XGXS_TX_CLK>,
+			 <&segcc SE_GCC_EMAC0_CNOC_APB_CLK>;
+		clock-names = "rpcs_rx", "rpcs_tx", "xgxs_rx", "xgxs_tx", "pclk";
 		power-domains = <&segcc SE_GCC_EMAC0_GDSC>;
 	};
 
