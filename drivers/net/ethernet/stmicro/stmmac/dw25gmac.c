@@ -186,10 +186,59 @@ void dw25gmac_dma_init_rx_chan(struct stmmac_priv *priv,
 	       ioaddr + XGMAC_DMA_CH_RxDESC_HADDR(addrs, chan));
 	writel(lower_32_bits(dma_addr),
 	       ioaddr + XGMAC_DMA_CH_RxDESC_LADDR(addrs, chan));
+}
 
-	/* Trigger descriptor cache base address computation (HPG §3.8.2 steps 9-10).
-	 * Must fire after all TxDescCtrl/RxDescCtrl indirect writes for this channel.
-	 * Ideally called once after all channels; calling per RX channel is safe.
-	 */
-	dw25gmac_desc_cache_compute(ioaddr);
+void dw25gmac_dma_map_tx_offline_chan(struct stmmac_priv *priv,
+				      void __iomem *ioaddr,
+				      struct stmmac_dma_cfg *dma_cfg, u32 chan)
+{
+	const struct dwxgmac_addrs *addrs = priv->plat->dwxgmac_addrs;
+	u32 tc = chan % priv->plat->tx_queues_to_use;
+	u32 value;
+
+	/* PDMA to TC mapping for offline channel */
+	value = rd_dma_ch_ind(ioaddr, MODE_TXEXTCFG, chan);
+	value &= ~XXVGMAC_TP2TCMP;
+	value |= FIELD_PREP(XXVGMAC_TP2TCMP, tc);
+	wr_dma_ch_ind(ioaddr, MODE_TXEXTCFG, chan, value);
+
+	/* VDMA to TC mapping for offline channel */
+	value = readl(ioaddr + XGMAC_DMA_CH_TX_CONTROL(addrs, chan));
+	value &= ~XXVGMAC_TVDMA2TCMP;
+	value |= FIELD_PREP(XXVGMAC_TVDMA2TCMP, tc);
+	writel(value, ioaddr + XGMAC_DMA_CH_TX_CONTROL(addrs, chan));
+}
+
+void dw25gmac_dma_map_rx_offline_chan(struct stmmac_priv *priv,
+				      void __iomem *ioaddr,
+				      struct stmmac_dma_cfg *dma_cfg, u32 chan)
+{
+	const struct dwxgmac_addrs *addrs = priv->plat->dwxgmac_addrs;
+	u32 tc = chan % priv->plat->rx_queues_to_use;
+	u32 value;
+
+	/* PDMA to TC mapping for offline channel */
+	value = rd_dma_ch_ind(ioaddr, MODE_RXEXTCFG, chan);
+	value &= ~XXVGMAC_RP2TCMP;
+	value |= FIELD_PREP(XXVGMAC_RP2TCMP, tc);
+	wr_dma_ch_ind(ioaddr, MODE_RXEXTCFG, chan, value);
+
+	/* VDMA to TC mapping for offline channel */
+	value = readl(ioaddr + XGMAC_DMA_CH_RX_CONTROL(addrs, chan));
+	value &= ~XXVGMAC_RVDMA2TCMP;
+	value |= FIELD_PREP(XXVGMAC_RVDMA2TCMP, tc);
+	writel(value, ioaddr + XGMAC_DMA_CH_RX_CONTROL(addrs, chan));
+}
+
+void dw25gmac_desc_cache_compute(void __iomem *ioaddr)
+{
+	u32 value;
+
+	value = readl(ioaddr + XGMAC_DMA_MODE);
+	value |= XXVGMAC_DSCB;
+	writel(value, ioaddr + XGMAC_DMA_MODE);
+
+	if (readl_poll_timeout(ioaddr + XGMAC_DMA_MODE, value,
+			       !(value & XXVGMAC_DSCB), 10, 200))
+		pr_warn("dw25gmac: timeout waiting for DSCB completion\n");
 }

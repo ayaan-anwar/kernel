@@ -94,4 +94,11 @@ void dw25gmac_dma_init_rx_chan(struct stmmac_priv *priv,
 			       void __iomem *ioaddr,
 			       struct stmmac_dma_cfg *dma_cfg,
 			       dma_addr_t dma_addr, u32 chan);
+void dw25gmac_dma_map_tx_offline_chan(struct stmmac_priv *priv,
+				      void __iomem *ioaddr,
+				      struct stmmac_dma_cfg *dma_cfg, u32 chan);
+void dw25gmac_dma_map_rx_offline_chan(struct stmmac_priv *priv,
+				      void __iomem *ioaddr,
+				      struct stmmac_dma_cfg *dma_cfg, u32 chan);
+void dw25gmac_desc_cache_compute(void __iomem *ioaddr);
 #endif /* __STMMAC_DW25GMAC_H__ */
