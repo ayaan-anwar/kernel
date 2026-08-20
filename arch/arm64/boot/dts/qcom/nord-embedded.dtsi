@@ -1040,7 +1040,6 @@
 		clock-names = "stmmaceth", "ptp_ref", "phyaux", "eee", "pclk";
 		power-domains = <&segcc SE_GCC_EMAC0_GDSC>;
 		resets = <&segcc SE_GCC_EMAC0_BCR>;
-		reset-names = "stmmaceth";
 		iommus = <&apps_smmu_2 0x1201 0x2>,
 			 <&apps_smmu_2 0x1202 0x0>,
 			 <&apps_smmu_2 0x1203 0x2>,
