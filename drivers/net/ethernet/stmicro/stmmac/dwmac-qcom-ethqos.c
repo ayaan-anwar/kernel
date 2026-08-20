@@ -1260,8 +1260,11 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		plat_dat->flags |= STMMAC_FLAG_TSO_EN;
 	if (of_device_is_compatible(np, "qcom,qcs404-ethqos"))
 		plat_dat->flags |= STMMAC_FLAG_RX_CLK_RUNS_IN_LPI;
-	if (data->dma_addr_width)
+	if (data->dma_addr_width) {
 		plat_dat->host_dma_width = data->dma_addr_width;
+		dev_info(dev, "host DMA address width set to %u bits\n",
+			 plat_dat->host_dma_width);
+	}
 
 	if (ethqos->serdes_phy) {
 		plat_dat->serdes_powerup = qcom_ethqos_serdes_powerup;
