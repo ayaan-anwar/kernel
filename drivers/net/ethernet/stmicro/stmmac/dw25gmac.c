@@ -25,23 +25,33 @@ u32 dw25gmac_decode_vdma_count(u32 regval)
 static int rd_dma_ch_ind(void __iomem *ioaddr, u8 mode, u32 channel)
 {
 	u32 reg_val = 0;
+	u32 value;
 
 	reg_val |= FIELD_PREP(XXVGMAC_MODE_SELECT, mode);
 	reg_val |= FIELD_PREP(XXVGMAC_ADDR_OFFSET, channel);
 	reg_val |= XXVGMAC_CMD_TYPE | XXVGMAC_OB;
 	writel(reg_val, ioaddr + XXVGMAC_DMA_CH_IND_CONTROL);
+	/* Poll until the hardware clears OB to signal the read is complete */
+	if (readl_poll_timeout_atomic(ioaddr + XXVGMAC_DMA_CH_IND_CONTROL, value,
+				      !(value & XXVGMAC_OB), 1, 1000))
+		pr_warn_ratelimited("dw25gmac: indirect read timed out\n");
 	return readl(ioaddr + XXVGMAC_DMA_CH_IND_DATA);
 }
 
 static void wr_dma_ch_ind(void __iomem *ioaddr, u8 mode, u32 channel, u32 val)
 {
 	u32 reg_val = 0;
+	u32 value;
 
 	writel(val, ioaddr + XXVGMAC_DMA_CH_IND_DATA);
 	reg_val |= FIELD_PREP(XXVGMAC_MODE_SELECT, mode);
 	reg_val |= FIELD_PREP(XXVGMAC_ADDR_OFFSET, channel);
 	reg_val |= XGMAC_OB;
 	writel(reg_val, ioaddr + XXVGMAC_DMA_CH_IND_CONTROL);
+	/* Poll until the hardware clears OB to signal the write is complete */
+	if (readl_poll_timeout_atomic(ioaddr + XXVGMAC_DMA_CH_IND_CONTROL, value,
+				      !(value & XXVGMAC_OB), 1, 1000))
+		pr_warn_ratelimited("dw25gmac: indirect write timed out\n");
 }
 
 static void dw25gmac_desc_cache_compute(void __iomem *ioaddr)
@@ -151,6 +161,14 @@ void dw25gmac_dma_init_tx_chan(struct stmmac_priv *priv,
 	       ioaddr + XGMAC_DMA_CH_TxDESC_HADDR(addrs, chan));
 	writel(lower_32_bits(dma_addr),
 	       ioaddr + XGMAC_DMA_CH_TxDESC_LADDR(addrs, chan));
+
+	/* Recompute descriptor cache to include this TX channel's TxDescCtrl
+	 * settings (HPG §3.8.2).  TX channels are initialized after RX channels,
+	 * so the per-RX-channel trigger in dw25gmac_dma_init_rx_chan() runs before
+	 * TX channel configs are in place.  Without this call the TX VDMA has no
+	 * valid descriptor cache entries and DMA descriptors stall with OWN=1.
+	 */
+	dw25gmac_desc_cache_compute(ioaddr);
 }
 
 void dw25gmac_dma_init_rx_chan(struct stmmac_priv *priv,
