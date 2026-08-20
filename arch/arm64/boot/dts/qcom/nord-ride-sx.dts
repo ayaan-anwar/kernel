@@ -719,7 +719,7 @@
 };
 
 &ethernet0 {
-	phy-mode = "usxgmii";
+	phy-mode = "10gbase-r";
 	status = "okay";
 
 	interconnects = <&hscnoc MASTER_APPSS_PROC QCOM_ICC_TAG_ALWAYS
