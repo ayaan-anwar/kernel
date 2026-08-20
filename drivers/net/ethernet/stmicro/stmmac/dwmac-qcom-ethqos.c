@@ -1303,9 +1303,15 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		plat_dat->serdes_powerdown  = qcom_ethqos_serdes_powerdown;
 	}
 
-	/* Enable TSO on queue0 and enable TBS on rest of the queues */
-	for (i = 1; i < plat_dat->tx_queues_to_use; i++)
-		plat_dat->tx_queues_cfg[i].tbs_en = 1;
+	/*
+	 * TBS (Time-Based Scheduling) is intentionally disabled for Nord during
+	 * initial bringup.  TBS descriptors carry a 64-bit launch-time field that
+	 * sits adjacent to the buffer-address field in the HDMA enhanced descriptor
+	 * layout.  An uninitialized launch-time is misread by the DMA engine as a
+	 * buffer address, producing an unmapped IOVA (e.g. 0xfffffc000) that faults
+	 * the SMMU under SID 0x1202 when the adapter is reset.  Enable TBS here
+	 * once proper SO_TXTIME / PTP clock synchronization is in place.
+	 */
 
 	return devm_stmmac_pltfr_probe(pdev, plat_dat, &stmmac_res);
 }
