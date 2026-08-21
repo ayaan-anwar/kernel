@@ -19,6 +19,7 @@
 
 #include <linux/clk.h>
 #include <linux/ethtool.h>
+#include <linux/gpio/consumer.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/phy/phy.h>
@@ -61,6 +62,7 @@ struct qcom_dwmac_usxgmii_phy_data {
 	struct clk_bulk_data clks[ARRAY_SIZE(qcom_dwmac_usxgmii_clk_names)];
 	struct regulator *vdda_0p9;
 	struct regulator *vdda_1p2;
+	struct gpio_desc *reset_gpio;
 };
 
 #define com_w(rm, off, v)  regmap_write((rm), QSERDES_COM_BASE + (off), (v))
@@ -243,6 +245,10 @@ static int qcom_dwmac_usxgmii_power_on(struct phy *phy)
 	if (ret)
 		goto err_clk;
 
+	/* Deassert SerDes reset after supplies and clocks are stable. */
+	gpiod_set_value_cansleep(data->reset_gpio, 0);
+	usleep_range(2000, 4000);
+
 	return 0;
 
 err_clk:
@@ -262,6 +268,8 @@ static int qcom_dwmac_usxgmii_power_off(struct phy *phy)
 
 	pcs_w(rm, QPHY_PCS_TX_MID_TERM_CTRL2, 0x08);
 	pcs_w(rm, QPHY_PCS_SW_RESET,          0x01);
+
+	gpiod_set_value_cansleep(data->reset_gpio, 1);
 
 	clk_bulk_disable_unprepare(ARRAY_SIZE(data->clks), data->clks);
 
@@ -333,6 +341,10 @@ static int qcom_dwmac_usxgmii_probe(struct platform_device *pdev)
 	data->vdda_1p2 = devm_regulator_get(dev, "vdda-1p2");
 	if (IS_ERR(data->vdda_1p2))
 		return PTR_ERR(data->vdda_1p2);
+
+	data->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
+	if (IS_ERR(data->reset_gpio))
+		return PTR_ERR(data->reset_gpio);
 
 	provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
 	if (IS_ERR(provider))
