@@ -142,6 +142,14 @@ static int qcom_xpcs_probe(struct platform_device *pdev)
 	if (IS_ERR(xpcs))
 		return dev_err_probe(dev, PTR_ERR(xpcs), "failed to register XPCS\n");
 
+	/*
+	 * Nord XPCS needs a Tx→Rx clock loopback as clk_rx_i source before the
+	 * switch supplies real Rx clocks.  rxc_always_on instructs pcs_pre_init()
+	 * to enable the loopback (via MII_BMCR BMCR_LOOPBACK) and xpcs_link_up()
+	 * to disable it once the physical link is established.
+	 */
+	xpcs->pcs.rxc_always_on = true;
+
 	dev_info(dev, "XPCS registered, id=0x%08x\n", xpcs->mdiodev->addr);
 
 	/*
