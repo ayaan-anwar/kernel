@@ -1055,7 +1055,7 @@
 		phy-names = "serdes";
 		dma-coherent;
 		snps,tso;
-		snps,pbl = <4>;
+		snps,pbl = <16>;
 		snps,no-pbl-x8;
 		rx-fifo-depth = <98304>;
 		tx-fifo-depth = <98304>;
@@ -1220,7 +1220,7 @@
 		phy-names = "serdes";
 		dma-coherent;
 		snps,tso;
-		snps,pbl = <4>;
+		snps,pbl = <16>;
 		snps,no-pbl-x8;
 		rx-fifo-depth = <98304>;
 		tx-fifo-depth = <98304>;
