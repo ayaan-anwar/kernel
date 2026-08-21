@@ -1369,7 +1369,7 @@
 		};
 
 		emac0_mtl_rx: rx-queues-config {
-			snps,rx-queues-to-use = <8>;
+			snps,rx-queues-to-use = <10>;
 			snps,rx-sched-sp;
 
 			queue0 {
@@ -1415,10 +1415,20 @@
 				snps,dcb-algorithm;
 				snps,map-to-dma-channel = <0x7>;
 			};
+
+			queue8 {
+				snps,dcb-algorithm;
+				snps,map-to-dma-channel = <0x8>;
+			};
+
+			queue9 {
+				snps,dcb-algorithm;
+				snps,map-to-dma-channel = <0x9>;
+			};
 		};
 
 		emac0_mtl_tx: tx-queues-config {
-			snps,tx-queues-to-use = <8>;
+			snps,tx-queues-to-use = <10>;
 			snps,tx-sched-sp;
 
 			queue0 {
@@ -1450,6 +1460,14 @@
 			};
 
 			queue7 {
+				snps,dcb-algorithm;
+			};
+
+			queue8 {
+				snps,dcb-algorithm;
+			};
+
+			queue9 {
 				snps,dcb-algorithm;
 			};
 		};

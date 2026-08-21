@@ -100,13 +100,9 @@ void dw25gmac_dma_init_tx_chan(struct stmmac_priv *priv,
 			       dma_addr_t dma_addr, u32 chan)
 {
 	const struct dwxgmac_addrs *addrs = priv->plat->dwxgmac_addrs;
-	u32 value;
-	u32 tc;
+	u32 pdma, tc, value;
 
-	/* Descriptor cache size and prefetch threshold size.
-	 * Use dma_cfg values when set by the platform; otherwise fall back to
-	 * reasonable defaults (256-byte cache, half-size prefetch threshold).
-	 */
+	/* Descriptor cache size and prefetch threshold size. */
 	value = rd_dma_ch_ind(ioaddr, MODE_TXDESCCTRL, chan);
 	value &= ~XXVGMAC_TXDCSZ;
 	value |= FIELD_PREP(XXVGMAC_TXDCSZ,
@@ -117,18 +113,21 @@ void dw25gmac_dma_init_tx_chan(struct stmmac_priv *priv,
 			    dma_cfg->tdps ? dma_cfg->tdps : XXVGMAC_TDPS_HALF);
 	wr_dma_ch_ind(ioaddr, MODE_TXDESCCTRL, chan, value);
 
-	/* Use one-to-one mapping between VDMA, TC, and PDMA. */
-	tc = chan;
+	/* Use custom VDMA→TC / VDMA→PDMA maps if provided, else 1:1 default. */
+	pdma = (dma_cfg->tx_vdma_pdma_map && chan < dma_cfg->total_tx_vdma)
+	       ? dma_cfg->tx_vdma_pdma_map[chan] : chan;
+	tc   = (dma_cfg->tx_vdma_tc_map && chan < dma_cfg->total_tx_vdma)
+	       ? dma_cfg->tx_vdma_tc_map[chan]   : chan;
 
-	/* 1-to-1 PDMA to TC mapping; optionally set AXI outstanding reads */
+	/* PDMA assignment; optionally set AXI outstanding reads */
 	value = rd_dma_ch_ind(ioaddr, MODE_TXEXTCFG, chan);
 	value &= ~XXVGMAC_TP2TCMP;
-	value |= FIELD_PREP(XXVGMAC_TP2TCMP, tc);
+	value |= FIELD_PREP(XXVGMAC_TP2TCMP, pdma);
 	if (dma_cfg->orrq)
 		value |= FIELD_PREP(XXVGMAC_ORRQ, dma_cfg->orrq);
 	wr_dma_ch_ind(ioaddr, MODE_TXEXTCFG, chan, value);
 
-	/* 1-to-1 VDMA to TC mapping */
+	/* VDMA to TC mapping */
 	value = readl(ioaddr + XGMAC_DMA_CH_TX_CONTROL(addrs, chan));
 	value &= ~XXVGMAC_TVDMA2TCMP;
 	value |= FIELD_PREP(XXVGMAC_TVDMA2TCMP, tc);
@@ -146,13 +145,9 @@ void dw25gmac_dma_init_rx_chan(struct stmmac_priv *priv,
 			       dma_addr_t dma_addr, u32 chan)
 {
 	const struct dwxgmac_addrs *addrs = priv->plat->dwxgmac_addrs;
-	u32 value;
-	u32 tc;
+	u32 pdma, tc, value;
 
-	/* Descriptor cache size and prefetch threshold size.
-	 * Use dma_cfg values when set by the platform; otherwise fall back to
-	 * reasonable defaults (256-byte cache, half-size prefetch threshold).
-	 */
+	/* Descriptor cache size and prefetch threshold size. */
 	value = rd_dma_ch_ind(ioaddr, MODE_RXDESCCTRL, chan);
 	value &= ~XXVGMAC_RXDCSZ;
 	value |= FIELD_PREP(XXVGMAC_RXDCSZ,
@@ -163,19 +158,22 @@ void dw25gmac_dma_init_rx_chan(struct stmmac_priv *priv,
 			    dma_cfg->rdps ? dma_cfg->rdps : XXVGMAC_RDPS_HALF);
 	wr_dma_ch_ind(ioaddr, MODE_RXDESCCTRL, chan, value);
 
-	/* Use one-to-one mapping between VDMA, TC, and PDMA. */
-	tc = chan;
+	/* Use custom VDMA→TC / VDMA→PDMA maps if provided, else 1:1 default. */
+	pdma = (dma_cfg->rx_vdma_pdma_map && chan < dma_cfg->total_rx_vdma)
+	       ? dma_cfg->rx_vdma_pdma_map[chan] : chan;
+	tc   = (dma_cfg->rx_vdma_tc_map && chan < dma_cfg->total_rx_vdma)
+	       ? dma_cfg->rx_vdma_tc_map[chan]   : chan;
 
-	/* 1-to-1 PDMA to TC mapping; enable RX PDMA; optionally set AXI outstanding writes */
+	/* PDMA assignment; enable RX PDMA; optionally set AXI outstanding writes */
 	value = rd_dma_ch_ind(ioaddr, MODE_RXEXTCFG, chan);
 	value &= ~XXVGMAC_RP2TCMP;
-	value |= FIELD_PREP(XXVGMAC_RP2TCMP, tc);
+	value |= FIELD_PREP(XXVGMAC_RP2TCMP, pdma);
 	if (dma_cfg->owrq)
 		value |= FIELD_PREP(XXVGMAC_OWRQ, dma_cfg->owrq);
 	value |= XXVGMAC_RXPEN;
 	wr_dma_ch_ind(ioaddr, MODE_RXEXTCFG, chan, value);
 
-	/* 1-to-1 VDMA to TC mapping */
+	/* VDMA to TC mapping */
 	value = readl(ioaddr + XGMAC_DMA_CH_RX_CONTROL(addrs, chan));
 	value &= ~XXVGMAC_RVDMA2TCMP;
 	value |= FIELD_PREP(XXVGMAC_RVDMA2TCMP, tc);
@@ -192,13 +190,18 @@ void dw25gmac_dma_map_tx_offline_chan(struct stmmac_priv *priv,
 				      struct stmmac_dma_cfg *dma_cfg, u32 chan)
 {
 	const struct dwxgmac_addrs *addrs = priv->plat->dwxgmac_addrs;
-	u32 tc = chan % priv->plat->tx_queues_to_use;
+	u32 pdma = (dma_cfg->tx_vdma_pdma_map && chan < dma_cfg->total_tx_vdma)
+		   ? dma_cfg->tx_vdma_pdma_map[chan]
+		   : chan % priv->plat->tx_queues_to_use;
+	u32 tc   = (dma_cfg->tx_vdma_tc_map && chan < dma_cfg->total_tx_vdma)
+		   ? dma_cfg->tx_vdma_tc_map[chan]
+		   : chan % priv->plat->tx_queues_to_use;
 	u32 value;
 
-	/* PDMA to TC mapping for offline channel */
+	/* PDMA assignment for offline channel */
 	value = rd_dma_ch_ind(ioaddr, MODE_TXEXTCFG, chan);
 	value &= ~XXVGMAC_TP2TCMP;
-	value |= FIELD_PREP(XXVGMAC_TP2TCMP, tc);
+	value |= FIELD_PREP(XXVGMAC_TP2TCMP, pdma);
 	wr_dma_ch_ind(ioaddr, MODE_TXEXTCFG, chan, value);
 
 	/* VDMA to TC mapping for offline channel */
@@ -213,13 +216,18 @@ void dw25gmac_dma_map_rx_offline_chan(struct stmmac_priv *priv,
 				      struct stmmac_dma_cfg *dma_cfg, u32 chan)
 {
 	const struct dwxgmac_addrs *addrs = priv->plat->dwxgmac_addrs;
-	u32 tc = chan % priv->plat->rx_queues_to_use;
+	u32 pdma = (dma_cfg->rx_vdma_pdma_map && chan < dma_cfg->total_rx_vdma)
+		   ? dma_cfg->rx_vdma_pdma_map[chan]
+		   : chan % priv->plat->rx_queues_to_use;
+	u32 tc   = (dma_cfg->rx_vdma_tc_map && chan < dma_cfg->total_rx_vdma)
+		   ? dma_cfg->rx_vdma_tc_map[chan]
+		   : chan % priv->plat->rx_queues_to_use;
 	u32 value;
 
-	/* PDMA to TC mapping for offline channel */
+	/* PDMA assignment for offline channel */
 	value = rd_dma_ch_ind(ioaddr, MODE_RXEXTCFG, chan);
 	value &= ~XXVGMAC_RP2TCMP;
-	value |= FIELD_PREP(XXVGMAC_RP2TCMP, tc);
+	value |= FIELD_PREP(XXVGMAC_RP2TCMP, pdma);
 	if (dma_cfg->owrq)
 		value |= FIELD_PREP(XXVGMAC_OWRQ, dma_cfg->owrq);
 	wr_dma_ch_ind(ioaddr, MODE_RXEXTCFG, chan, value);

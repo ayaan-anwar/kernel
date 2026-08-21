@@ -150,6 +150,12 @@ struct ethqos_emac_driver_data {
 	const struct ethqos_noc_clk_cfg *noc_clk_cfg;
 	unsigned int num_noc_clks;
 	unsigned long axi_clk_rate;
+	/* DW25GMAC HDMA: VDMA→TC and VDMA→PDMA maps (NULL = 1:1 default) */
+	const u8 *tx_vdma_tc_map;
+	const u8 *rx_vdma_tc_map;
+	const u8 *tx_vdma_pdma_map;
+	const u8 *rx_vdma_pdma_map;
+	u32 total_vdma;   /* total VDMA channels including offline */
 };
 
 struct qcom_ethqos {
@@ -413,6 +419,23 @@ static const struct ethqos_emac_driver_data shikra_data = {
 /*
  * Nord (SA8797p) — USXGMII only, no RGMII IO macro POR values needed.
  */
+static const struct ethqos_emac_por emac_nord_por[] = {
+	{ .offset = RGMII_IO_MACRO_CONFIG,	.value = 0x00C04D03 },
+	{ .offset = SDCC_HC_REG_DLL_CONFIG,	.value = 0x2004642C },
+	{ .offset = RGMII_IO_MACRO_CONFIG2,	.value = 0x00222060 },
+	{ .offset = RGMII_IO_MACRO_SCRATCH_2,	.value = 0x4c },
+};
+
+/*
+ * Nord has 12 TX/RX VDMAs.  VDMAs 0–9 are enabled (10 queues); 10–11 are
+ * offline.  The hardware requires a non-trivial VDMA→TC / VDMA→PDMA mapping:
+ * TX VDMAs 0-3 share TC 0 and PDMAs 0-3; VDMAs 6-9 share PDMA 6 on TCs 3-6.
+ * Derived from the downstream base-devicetree seca-ethernet.dtsi.
+ */
+static const u8 nord_tx_vdma_tc_map[]   = { 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 7 };
+static const u8 nord_rx_vdma_tc_map[]   = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 };
+static const u8 nord_tx_vdma_pdma_map[] = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 };
+static const u8 nord_rx_vdma_pdma_map[] = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 };
 static const struct ethqos_emac_driver_data emac_nord_data = {
 	.dma_addr_width = 40,
 	.link_clk_name = "phyaux",
@@ -420,6 +443,11 @@ static const struct ethqos_emac_driver_data emac_nord_data = {
 	.needs_sgmii_loopback = true,
 	.has_io_macro_ge_4 = true,
 	.axi_clk_rate = 380000000,
+	.tx_vdma_tc_map   = nord_tx_vdma_tc_map,
+	.rx_vdma_tc_map   = nord_rx_vdma_tc_map,
+	.tx_vdma_pdma_map = nord_tx_vdma_pdma_map,
+	.rx_vdma_pdma_map = nord_rx_vdma_pdma_map,
+	.total_vdma       = ARRAY_SIZE(nord_tx_vdma_tc_map),
 	.dwxgmac_addrs = {
 		.dma_even_chan_base = 0x00008500,
 		.dma_odd_chan_base  = 0x00008580,
@@ -1018,7 +1046,8 @@ static int qcom_ethqos_init_noc_clks(struct qcom_ethqos *ethqos,
 	return 0;
 }
 
-static void qcom_ethqos_hdma_cfg(struct plat_stmmacenet_data *plat)
+static void qcom_ethqos_hdma_cfg(struct plat_stmmacenet_data *plat,
+				 const struct ethqos_emac_driver_data *data)
 {
 	/* 25G HDMA AXI bus parameters for SA8797P.
 	 * orrq/owrq: maximise outstanding AXI read/write requests (up to 63).
@@ -1031,6 +1060,16 @@ static void qcom_ethqos_hdma_cfg(struct plat_stmmacenet_data *plat)
 	plat->dma_cfg->tdps = 1;
 	plat->dma_cfg->rxdcsz = 4;
 	plat->dma_cfg->rdps = 1;
+
+	/* VDMA→TC / VDMA→PDMA channel maps (Nord-specific; NULL = 1:1 default) */
+	if (data->tx_vdma_tc_map) {
+		plat->dma_cfg->tx_vdma_tc_map   = data->tx_vdma_tc_map;
+		plat->dma_cfg->rx_vdma_tc_map   = data->rx_vdma_tc_map;
+		plat->dma_cfg->tx_vdma_pdma_map = data->tx_vdma_pdma_map;
+		plat->dma_cfg->rx_vdma_pdma_map = data->rx_vdma_pdma_map;
+		plat->dma_cfg->total_tx_vdma    = data->total_vdma;
+		plat->dma_cfg->total_rx_vdma    = data->total_vdma;
+	}
 }
 
 /*
@@ -1212,7 +1251,7 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		plat_dat->dwxgmac_addrs = &data->dwxgmac_addrs;
 	plat_dat->has_hdma = data->has_hdma;
 	if (data->has_hdma)
-		qcom_ethqos_hdma_cfg(plat_dat);
+		qcom_ethqos_hdma_cfg(plat_dat, data);
 	if (data->axi_clk_rate)
 		plat_dat->clk_ref_rate = data->axi_clk_rate;
 	plat_dat->pmt = true;
