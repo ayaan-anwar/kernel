@@ -95,6 +95,7 @@ properties:
           - qcom,pmk8550
           - qcom,pmk8850
           - qcom,pmm8155au
+          - qcom,pmau0102
           - qcom,pmm8654au
           - qcom,pmp8074
           - qcom,pmr735a
