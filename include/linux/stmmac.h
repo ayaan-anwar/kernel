@@ -140,6 +140,18 @@ struct stmmac_dma_cfg {
 	u32 rdps;
 	u32 txdcsz;
 	u32 rxdcsz;
+	/* DW25GMAC HDMA: optional non-1:1 VDMA→TC / VDMA→PDMA channel maps.
+	 * NULL = default 1:1 (tc == chan).  Length must equal total_tx/rx_vdma.
+	 * tx_vdma_tc_map[n]   = TC index that TX VDMA n is assigned to.
+	 * tx_vdma_pdma_map[n] = PDMA index that TX VDMA n is routed through.
+	 * total_tx/rx_vdma    = all VDMAs including offline ones.
+	 */
+	const u8 *tx_vdma_tc_map;
+	const u8 *rx_vdma_tc_map;
+	const u8 *tx_vdma_pdma_map;
+	const u8 *rx_vdma_pdma_map;
+	u32 total_tx_vdma;
+	u32 total_rx_vdma;
 };
 
 #define AXI_BLEN	7
