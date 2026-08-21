@@ -1184,8 +1184,9 @@
 		clocks = <&segcc SE_GCC_EMAC1_RPCS_RX_CLK>,
 			 <&segcc SE_GCC_EMAC1_RPCS_TX_CLK>,
 			 <&segcc SE_GCC_EMAC1_XGXS_RX_CLK>,
-			 <&segcc SE_GCC_EMAC1_XGXS_TX_CLK>;
-		clock-names = "rpcs_rx", "rpcs_tx", "xgxs_rx", "xgxs_tx";
+			 <&segcc SE_GCC_EMAC1_XGXS_TX_CLK>,
+			 <&segcc SE_GCC_EMAC1_CNOC_APB_CLK>;
+		clock-names = "rpcs_rx", "rpcs_tx", "xgxs_rx", "xgxs_tx", "pclk";
 		power-domains = <&segcc SE_GCC_EMAC1_GDSC>;
 	};
 
@@ -1200,11 +1201,12 @@
 		clocks = <&segcc SE_GCC_EMAC1_AXI_CLK>,
 			 <&segcc SE_GCC_EMAC1_PTP_CLK>,
 			 <&segcc SE_GCC_EMAC1_PHY_AUX_CLK>,
-			 <&segcc SE_GCC_EEE_EMAC1_CLK>;
-		clock-names = "stmmaceth", "ptp_ref", "phyaux", "eee";
+			 <&segcc SE_GCC_EEE_EMAC1_CLK>,
+			 <&segcc SE_GCC_EMAC1_RGMII_CLK>,
+			 <&segcc SE_GCC_EMAC1_CNOC_APB_CLK>;
+		clock-names = "stmmaceth", "ptp_ref", "phyaux", "eee", "rgmii", "pclk";
 		power-domains = <&segcc SE_GCC_EMAC1_GDSC>;
 		resets = <&segcc SE_GCC_EMAC1_BCR>;
-		reset-names = "stmmaceth";
 		iommus = <&apps_smmu_2 0x11c1 0x8>,
 			 <&apps_smmu_2 0x11c2 0x1>,
 			 <&apps_smmu_2 0x11c3 0x1>,
@@ -1239,7 +1241,7 @@
 		};
 
 		emac1_mtl_rx: rx-queues-config {
-			snps,rx-queues-to-use = <8>;
+			snps,rx-queues-to-use = <10>;
 			snps,rx-sched-sp;
 
 			queue0 {
@@ -1285,10 +1287,20 @@
 				snps,dcb-algorithm;
 				snps,map-to-dma-channel = <0x7>;
 			};
+
+			queue8 {
+				snps,dcb-algorithm;
+				snps,map-to-dma-channel = <0x8>;
+			};
+
+			queue9 {
+				snps,dcb-algorithm;
+				snps,map-to-dma-channel = <0x9>;
+			};
 		};
 
 		emac1_mtl_tx: tx-queues-config {
-			snps,tx-queues-to-use = <8>;
+			snps,tx-queues-to-use = <10>;
 			snps,tx-sched-sp;
 
 			queue0 {
@@ -1320,6 +1332,14 @@
 			};
 
 			queue7 {
+				snps,dcb-algorithm;
+			};
+
+			queue8 {
+				snps,dcb-algorithm;
+			};
+
+			queue9 {
 				snps,dcb-algorithm;
 			};
 		};
