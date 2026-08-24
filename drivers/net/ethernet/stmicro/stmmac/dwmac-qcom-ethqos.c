@@ -4,12 +4,16 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_net.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/phy.h>
 #include <linux/phy/phy.h>
+#include <linux/interconnect.h>
+#include <linux/pcs/pcs-xpcs.h>
 
 #include "stmmac.h"
 #include "stmmac_platform.h"
+#include "dwxgmac2.h"		/* XGMAC_DMA_MODE, XGMAC_SWR */
 
 #define RGMII_IO_MACRO_CONFIG		0x0
 #define SDCC_HC_REG_DLL_CONFIG		0x4
@@ -86,6 +90,41 @@
 
 #define ETHQOS_MAX_NOC_CLKS			3
 
+/* IO macro generation 4 (USXGMII / 10GBaseR / 5GBaseR) */
+#define RGMII_IO_MACRO_SCRATCH_2		0x44
+#define RGMII_IO_MACRO_BYPASS			0x16C
+#define EMAC_WRAPPER_SGMII_PHY_CNTRL0		0x170
+/* V4 replaces EMAC_WRAPPER_SGMII_PHY_CNTRL1 (0xf4) for io_macro_ge_4 platforms */
+#define EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4	0x174
+#define EMAC_WRAPPER_USXGMII_MUX_SEL		0x1D0
+
+/* EMAC_WRAPPER_SGMII_PHY_CNTRL0 fields */
+#define SGMII_PHY_CNTRL0_2P5G_1G_CLK_SEL	GENMASK(6, 5)
+
+/* EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4 fields */
+#define SGMII_PHY_CNTRL1_USXGMII_GMII_MASTER_CLK_MUX_SEL	BIT(4)
+#define SGMII_PHY_CNTRL1_RGMII_SGMII_CLK_MUX_SEL		BIT(0)
+
+/* RGMII_IO_MACRO_BYPASS fields */
+#define RGMII_BYPASS_EN				BIT(0)
+
+/* EMAC_WRAPPER_USXGMII_MUX_SEL fields */
+#define USXGMII_CLK_BLK_GMII_CLK_BLK_SEL	BIT(1)
+#define USXGMII_CLK_BLK_CLK_EN			BIT(0)
+
+/* RGMII_IO_MACRO_CONFIG2 additional fields for io_macro_ge_4 */
+#define RGMII_CONFIG2_MODE_EN_VIA_GMII		BIT(21)
+#define RGMII_CONFIG2_MAX_SPD_PRG_3		GENMASK(20, 17)
+
+/* RGMII_IO_MACRO_CONFIG V4 speed-programming fields */
+#define RGMII_CONFIG_MAX_SPD_PRG_9_V4		GENMASK(18, 10)
+#define RGMII_CONFIG_MAX_SPD_PRG_2_V4		GENMASK(9, 6)
+
+/* RGMII_IO_MACRO_SCRATCH_2 speed-programming fields */
+#define RGMII_SCRATCH2_MAX_SPD_PRG_4		GENMASK(5, 2)
+#define RGMII_SCRATCH2_MAX_SPD_PRG_5		GENMASK(9, 6)
+#define RGMII_SCRATCH2_MAX_SPD_PRG_6		GENMASK(13, 10)
+
 struct ethqos_emac_por {
 	unsigned int offset;
 	unsigned int value;
@@ -101,29 +140,46 @@ struct ethqos_emac_driver_data {
 	unsigned int num_rgmii_por;
 	bool rgmii_config_loopback_en;
 	bool has_emac_ge_3;
+	bool has_io_macro_ge_4;
+	bool has_hdma;
 	u8 dma_addr_width;
 	const char *link_clk_name;
 	struct dwmac4_addrs dwmac4_addrs;
+	struct dwxgmac_addrs dwxgmac_addrs;
 	bool needs_sgmii_loopback;
 	const struct ethqos_noc_clk_cfg *noc_clk_cfg;
 	unsigned int num_noc_clks;
+	unsigned long axi_clk_rate;
+	/* DW25GMAC HDMA: VDMA→TC and VDMA→PDMA maps (NULL = 1:1 default) */
+	const u8 *tx_vdma_tc_map;
+	const u8 *rx_vdma_tc_map;
+	const u8 *tx_vdma_pdma_map;
+	const u8 *rx_vdma_pdma_map;
+	u32 total_vdma;   /* total VDMA channels including offline */
 };
 
 struct qcom_ethqos {
 	struct platform_device *pdev;
 	void __iomem *rgmii_base;
+	void __iomem *xpcs_base;	/* direct XPCS APB window for SR_MII_CTRL readback */
 	struct clk *link_clk;
 	struct phy *serdes_phy;
 	phy_interface_t phy_mode;
+	int speed;
 
 	const struct ethqos_emac_por *rgmii_por;
 	unsigned int num_rgmii_por;
 	bool rgmii_config_loopback_en;
 	bool has_emac_ge_3;
+	bool has_io_macro_ge_4;
 	bool needs_sgmii_loopback;
 
 	struct clk_bulk_data noc_clks[ETHQOS_MAX_NOC_CLKS];
 	int num_noc_clks;
+
+	struct icc_path *icc_cpu_mac;
+	struct icc_path *icc_mac_mem;
+	struct icc_path *icc_ahb2phy;
 };
 
 static u32 rgmii_readl(struct qcom_ethqos *ethqos, unsigned int offset)
@@ -212,14 +268,18 @@ static int ethqos_set_clk_tx_rate(void *bsp_priv, struct clk *clk_tx_i,
 static void
 qcom_ethqos_set_sgmii_loopback(struct qcom_ethqos *ethqos, bool enable)
 {
-	if (!ethqos->needs_sgmii_loopback ||
-	    ethqos->phy_mode != PHY_INTERFACE_MODE_2500BASEX)
+	u32 val = enable ? SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN : 0;
+	unsigned int reg;
+
+	if (!ethqos->needs_sgmii_loopback)
 		return;
 
-	rgmii_updatel(ethqos,
-		      SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN,
-		      enable ? SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN : 0,
-		      EMAC_WRAPPER_SGMII_PHY_CNTRL1);
+	/* io_macro_ge_4 uses SGMII_PHY_CNTRL1_V4 (0x174) instead of 0xf4 */
+	reg = ethqos->has_io_macro_ge_4 ?
+	      EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4 : EMAC_WRAPPER_SGMII_PHY_CNTRL1;
+
+	rgmii_updatel(ethqos, SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN,
+		      val, reg);
 }
 
 static void ethqos_set_func_clk_en(struct qcom_ethqos *ethqos)
@@ -356,6 +416,50 @@ static const struct ethqos_emac_driver_data shikra_data = {
 	},
 };
 
+/*
+ * Nord (SA8797p) — USXGMII only, no RGMII IO macro POR values needed.
+ */
+static const struct ethqos_emac_por emac_nord_por[] = {
+	{ .offset = RGMII_IO_MACRO_CONFIG,	.value = 0x00C04D03 },
+	{ .offset = SDCC_HC_REG_DLL_CONFIG,	.value = 0x2004642C },
+	{ .offset = RGMII_IO_MACRO_CONFIG2,	.value = 0x00222060 },
+	{ .offset = RGMII_IO_MACRO_SCRATCH_2,	.value = 0x4c },
+};
+
+/*
+ * Nord has 12 TX/RX VDMAs.  VDMAs 0–9 are enabled (10 queues); 10–11 are
+ * offline.  The hardware requires a non-trivial VDMA→TC / VDMA→PDMA mapping:
+ * TX VDMAs 0-3 share TC 0 and PDMAs 0-3; VDMAs 6-9 share PDMA 6 on TCs 3-6.
+ * Derived from the downstream base-devicetree seca-ethernet.dtsi.
+ */
+static const u8 nord_tx_vdma_tc_map[]   = { 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 7 };
+static const u8 nord_rx_vdma_tc_map[]   = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 };
+static const u8 nord_tx_vdma_pdma_map[] = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 };
+static const u8 nord_rx_vdma_pdma_map[] = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 };
+static const struct ethqos_emac_driver_data emac_nord_data = {
+	.dma_addr_width = 40,
+	.link_clk_name = "phyaux",
+	.has_hdma = true,
+	.needs_sgmii_loopback = true,
+	.has_io_macro_ge_4 = true,
+	.axi_clk_rate = 380000000,
+	.tx_vdma_tc_map   = nord_tx_vdma_tc_map,
+	.rx_vdma_tc_map   = nord_rx_vdma_tc_map,
+	.tx_vdma_pdma_map = nord_tx_vdma_pdma_map,
+	.rx_vdma_pdma_map = nord_rx_vdma_pdma_map,
+	.total_vdma       = ARRAY_SIZE(nord_tx_vdma_tc_map),
+	.dwxgmac_addrs = {
+		.dma_even_chan_base = 0x00008500,
+		.dma_odd_chan_base  = 0x00008580,
+		.dma_chan_offset    = 0x00001000,
+		.mtl_chan_base      = 0x00008000,
+		.mtl_chan_offset    = 0x00001000,
+		.timestamp_base     = 0x00007000,
+		.pps_base           = 0x00007080,
+		.pps_offset         = 0x10,
+	},
+};
+
 static int ethqos_dll_configure(struct qcom_ethqos *ethqos)
 {
 	struct device *dev = &ethqos->pdev->dev;
@@ -424,8 +528,9 @@ static int ethqos_dll_configure(struct qcom_ethqos *ethqos)
 	return 0;
 }
 
-static void ethqos_rgmii_macro_init(struct qcom_ethqos *ethqos, int speed)
+static int ethqos_rgmii_macro_init(struct qcom_ethqos *ethqos, int speed)
 {
+	struct device *dev = &ethqos->pdev->dev;
 	unsigned int prg_rclk_dly, loopback;
 	unsigned int phase_shift;
 
@@ -435,6 +540,11 @@ static void ethqos_rgmii_macro_init(struct qcom_ethqos *ethqos, int speed)
 
 	/* Select RGMII, write 0 to interface select */
 	rgmii_clrmask(ethqos, RGMII_CONFIG_INTF_SEL, RGMII_IO_MACRO_CONFIG);
+
+	if (speed != SPEED_1000 && speed != SPEED_100 && speed != SPEED_10) {
+		dev_err(dev, "Invalid speed %d\n", speed);
+		return -EINVAL;
+	}
 
 	rgmii_setmask(ethqos, RGMII_CONFIG_DDR_MODE, RGMII_IO_MACRO_CONFIG);
 
@@ -458,7 +568,8 @@ static void ethqos_rgmii_macro_init(struct qcom_ethqos *ethqos, int speed)
 		      RGMII_IO_MACRO_CONFIG2);
 
 	/* Determine if the PHY adds a 2 ns TX delay or the MAC handles it */
-	if (ethqos->phy_mode == PHY_INTERFACE_MODE_RGMII_TXID)
+	if (ethqos->phy_mode == PHY_INTERFACE_MODE_RGMII_ID ||
+	    ethqos->phy_mode == PHY_INTERFACE_MODE_RGMII_TXID)
 		phase_shift = 0;
 	else
 		phase_shift = RGMII_CONFIG2_TX_CLK_PHASE_SHIFT_EN;
@@ -525,6 +636,8 @@ static void ethqos_rgmii_macro_init(struct qcom_ethqos *ethqos, int speed)
 
 	rgmii_updatel(ethqos, RGMII_CONFIG_LOOPBACK_EN, loopback,
 		      RGMII_IO_MACRO_CONFIG);
+
+	return 0;
 }
 
 static void ethqos_rgmii_id_macro_init(struct qcom_ethqos *ethqos, int speed)
@@ -561,6 +674,130 @@ static void ethqos_rgmii_id_macro_init(struct qcom_ethqos *ethqos, int speed)
 	rgmii_setmask(ethqos, RGMII_CONFIG2_RX_PROG_SWAP, RGMII_IO_MACRO_CONFIG2);
 }
 
+static int ethqos_configure_usxgmii(struct qcom_ethqos *ethqos)
+{
+	struct device *dev = &ethqos->pdev->dev;
+	unsigned int i;
+
+	/* Reset IO macro to POR values before USXGMII configuration */
+	for (i = 0; i < ethqos->num_rgmii_por; i++)
+		rgmii_writel(ethqos, ethqos->rgmii_por[i].value,
+			     ethqos->rgmii_por[i].offset);
+
+	ethqos_set_func_clk_en(ethqos);
+
+	rgmii_updatel(ethqos, RGMII_BYPASS_EN, RGMII_BYPASS_EN,
+		      RGMII_IO_MACRO_BYPASS);
+	rgmii_updatel(ethqos, RGMII_CONFIG2_MODE_EN_VIA_GMII, 0,
+		      RGMII_IO_MACRO_CONFIG2);
+	rgmii_updatel(ethqos, SGMII_PHY_CNTRL0_2P5G_1G_CLK_SEL, BIT(5),
+		      EMAC_WRAPPER_SGMII_PHY_CNTRL0);
+	rgmii_updatel(ethqos, SGMII_PHY_CNTRL1_RGMII_SGMII_CLK_MUX_SEL, 0,
+		      EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4);
+	rgmii_updatel(ethqos, SGMII_PHY_CNTRL1_USXGMII_GMII_MASTER_CLK_MUX_SEL,
+		      SGMII_PHY_CNTRL1_USXGMII_GMII_MASTER_CLK_MUX_SEL,
+		      EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4);
+	rgmii_updatel(ethqos, SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN, 0,
+		      EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4);
+
+	/* Clear USXGMII clock block before selecting speed */
+	rgmii_updatel(ethqos, USXGMII_CLK_BLK_GMII_CLK_BLK_SEL, 0,
+		      EMAC_WRAPPER_USXGMII_MUX_SEL);
+	rgmii_updatel(ethqos, USXGMII_CLK_BLK_CLK_EN, 0,
+		      EMAC_WRAPPER_USXGMII_MUX_SEL);
+
+	switch (ethqos->speed) {
+	case SPEED_10000:
+		rgmii_updatel(ethqos, USXGMII_CLK_BLK_GMII_CLK_BLK_SEL,
+			      USXGMII_CLK_BLK_GMII_CLK_BLK_SEL,
+			      EMAC_WRAPPER_USXGMII_MUX_SEL);
+		break;
+	case SPEED_5000:
+		rgmii_updatel(ethqos, SGMII_PHY_CNTRL0_2P5G_1G_CLK_SEL, 0,
+			      EMAC_WRAPPER_SGMII_PHY_CNTRL0);
+		rgmii_updatel(ethqos, RGMII_CONFIG_MAX_SPD_PRG_2_V4,
+			      BIT(6) | BIT(7), RGMII_IO_MACRO_CONFIG);
+		rgmii_updatel(ethqos, RGMII_CONFIG2_MAX_SPD_PRG_3,
+			      BIT(17) | BIT(18), RGMII_IO_MACRO_CONFIG2);
+		break;
+	case SPEED_2500:
+		rgmii_updatel(ethqos, SGMII_PHY_CNTRL0_2P5G_1G_CLK_SEL, 0,
+			      EMAC_WRAPPER_SGMII_PHY_CNTRL0);
+		rgmii_updatel(ethqos, RGMII_CONFIG_SGMII_CLK_DVDR,
+			      BIT(10) | BIT(11), RGMII_IO_MACRO_CONFIG);
+		rgmii_updatel(ethqos, RGMII_SCRATCH2_MAX_SPD_PRG_4,
+			      BIT(2) | BIT(3), RGMII_IO_MACRO_SCRATCH_2);
+		rgmii_updatel(ethqos, RGMII_SCRATCH2_MAX_SPD_PRG_5, 0,
+			      RGMII_IO_MACRO_SCRATCH_2);
+		break;
+	case SPEED_1000:
+		rgmii_updatel(ethqos, RGMII_CONFIG2_RGMII_CLK_SEL_CFG,
+			      RGMII_CONFIG2_RGMII_CLK_SEL_CFG,
+			      RGMII_IO_MACRO_CONFIG2);
+		break;
+	case SPEED_100:
+		rgmii_updatel(ethqos, RGMII_CONFIG2_RGMII_CLK_SEL_CFG,
+			      RGMII_CONFIG2_RGMII_CLK_SEL_CFG,
+			      RGMII_IO_MACRO_CONFIG2);
+		rgmii_updatel(ethqos, RGMII_CONFIG_MAX_SPD_PRG_2_V4,
+			      BIT(9), RGMII_IO_MACRO_CONFIG);
+		rgmii_updatel(ethqos, RGMII_CONFIG2_MAX_SPD_PRG_3,
+			      BIT(20), RGMII_IO_MACRO_CONFIG2);
+		rgmii_updatel(ethqos, RGMII_SCRATCH2_MAX_SPD_PRG_6,
+			      BIT(10), RGMII_IO_MACRO_SCRATCH_2);
+		break;
+	case SPEED_10:
+		rgmii_updatel(ethqos, RGMII_CONFIG2_RGMII_CLK_SEL_CFG,
+			      RGMII_CONFIG2_RGMII_CLK_SEL_CFG,
+			      RGMII_IO_MACRO_CONFIG2);
+		break;
+	default:
+		dev_err(dev, "Invalid USXGMII speed %d\n", ethqos->speed);
+		return -EINVAL;
+	}
+
+	/*
+	 * Keep USXGMII_CLK_BLK_CLK_EN cleared.  Downstream and the Nord HPG
+	 * program this bit to 0; setting it back to 1 leaves the wrapper at
+	 * 0x3 instead of the expected 0x2 after 10G configuration and the link
+	 * reports up without passing packets.
+	 */
+	dev_info(dev, "USXGMII wrapper configured: mux=0x%08x phy_ctrl1=0x%08x\n",
+		 rgmii_readl(ethqos, EMAC_WRAPPER_USXGMII_MUX_SEL),
+		 rgmii_readl(ethqos, EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4));
+
+	return 0;
+}
+
+static void ethqos_fix_mac_speed_usxgmii(void *bsp_priv,
+					  phy_interface_t interface, int speed,
+					  unsigned int mode)
+{
+	struct qcom_ethqos *ethqos = bsp_priv;
+	struct net_device *ndev = dev_get_drvdata(&ethqos->pdev->dev);
+	struct stmmac_priv *priv = netdev_priv(ndev);
+	struct phylink_pcs *pcs;
+
+	ethqos->speed = speed;
+	ethqos_configure_usxgmii(ethqos);
+
+	/*
+	 * phylink does not call pcs_link_up() for fixed-link interfaces; it
+	 * resolves the link state directly from the DT fixed-link node without
+	 * going through the PCS get_state / link_up path.  Drive it manually
+	 * here so that xpcs_link_up() runs and clears USXGMII_EN (which was
+	 * set by pcs_pre_init() for the Tx→Rx clock loopback during DMA reset).
+	 * Without this, the XPCS encodes TX frames as USXGMII instead of pure
+	 * 10GBASE-R 64B/66B, and the switch discards every frame.
+	 */
+	if (priv->hw->xpcs) {
+		pcs = xpcs_to_phylink_pcs(priv->hw->xpcs);
+		if (pcs->ops->pcs_link_up)
+			pcs->ops->pcs_link_up(pcs, PHYLINK_PCS_NEG_NONE,
+					      interface, speed, DUPLEX_FULL);
+	}
+}
+
 static void ethqos_fix_mac_speed_rgmii(void *bsp_priv,
 				       phy_interface_t interface, int speed,
 				       unsigned int mode)
@@ -571,6 +808,8 @@ static void ethqos_fix_mac_speed_rgmii(void *bsp_priv,
 	u32 val;
 
 	dev = &ethqos->pdev->dev;
+
+	ethqos->speed = speed;
 
 	/* Reset to POR values and enable clk */
 	for (i = 0; i < ethqos->num_rgmii_por; i++)
@@ -666,6 +905,8 @@ static void ethqos_fix_mac_speed_sgmii(void *bsp_priv,
 {
 	struct qcom_ethqos *ethqos = bsp_priv;
 
+	ethqos->speed = speed;
+
 	switch (speed) {
 	case SPEED_2500:
 	case SPEED_1000:
@@ -682,7 +923,7 @@ static void ethqos_fix_mac_speed_sgmii(void *bsp_priv,
 		break;
 	}
 
-	ethqos_pcs_set_inband(ethqos, interface == PHY_INTERFACE_MODE_SGMII);
+	ethqos_pcs_set_inband(ethqos, ethqos->phy_mode == PHY_INTERFACE_MODE_SGMII);
 }
 
 static int qcom_ethqos_serdes_powerup(struct net_device *ndev, void *priv)
@@ -714,16 +955,14 @@ static int ethqos_mac_finish_serdes(struct net_device *ndev, void *priv,
 				    phy_interface_t interface)
 {
 	struct qcom_ethqos *ethqos = priv;
-	int ret = 0;
 
 	qcom_ethqos_set_sgmii_loopback(ethqos, false);
+	dev_info(&ethqos->pdev->dev, "SGMII wrapper loopback disabled at mac_finish\n");
 
-	if (interface == PHY_INTERFACE_MODE_SGMII ||
-	    interface == PHY_INTERFACE_MODE_2500BASEX)
-		ret = phy_set_mode_ext(ethqos->serdes_phy, PHY_MODE_ETHERNET,
-				       interface);
+	if (ethqos->serdes_phy && ethqos->speed)
+		return phy_set_speed(ethqos->serdes_phy, ethqos->speed);
 
-	return ret;
+	return 0;
 }
 
 static int ethqos_clks_config(void *priv, bool enabled)
@@ -819,6 +1058,131 @@ static int qcom_ethqos_init_noc_clks(struct qcom_ethqos *ethqos,
 	return 0;
 }
 
+static void qcom_ethqos_hdma_cfg(struct plat_stmmacenet_data *plat,
+				 const struct ethqos_emac_driver_data *data)
+{
+	/* 25G HDMA AXI bus parameters for SA8797P.
+	 * orrq/owrq: maximise outstanding AXI read/write requests (up to 63).
+	 * txdcsz/rxdcsz: descriptor cache size (encoded per XXVGMAC_TXDCSZ_*).
+	 * tdps/rdps: descriptor prefetch threshold (encoded per XXVGMAC_TDPS_*).
+	 */
+	plat->dma_cfg->orrq = 15;
+	plat->dma_cfg->owrq = 15;
+	plat->dma_cfg->txdcsz = 4;
+	plat->dma_cfg->tdps = 1;
+	plat->dma_cfg->rxdcsz = 4;
+	plat->dma_cfg->rdps = 1;
+
+	/* VDMA→TC / VDMA→PDMA channel maps (Nord-specific; NULL = 1:1 default) */
+	if (data->tx_vdma_tc_map) {
+		plat->dma_cfg->tx_vdma_tc_map   = data->tx_vdma_tc_map;
+		plat->dma_cfg->rx_vdma_tc_map   = data->rx_vdma_tc_map;
+		plat->dma_cfg->tx_vdma_pdma_map = data->tx_vdma_pdma_map;
+		plat->dma_cfg->rx_vdma_pdma_map = data->rx_vdma_pdma_map;
+		plat->dma_cfg->total_tx_vdma    = data->total_vdma;
+		plat->dma_cfg->total_rx_vdma    = data->total_vdma;
+	}
+}
+
+/*
+ * XPCS APB offset of SR_MII_CTRL (MDIO_MMD_VEND2 standard reg 0).
+ * From the XPCS APB map: 0x4000–0x4FFF are SR_MII standard registers;
+ * SR_MII_CTRL = xpcs_base + (reg << 2) + 0x4000, reg=0 → offset 0x4000.
+ * For EMAC0: physical address = 0x1A14000 + 0x4000 = 0x1A18000.
+ */
+#define QCOM_XPCS_SR_MII_CTRL_OFF	0x4000
+
+/*
+ * Nord EMAC (SA8797P, 10G XGMAC2) DMA soft reset.
+ *
+ * XGMAC2 requires clk_rx_i for any DMA register access.  Without an external
+ * PHY supplying this clock the first readl of XGMAC_DMA_MODE causes a
+ * synchronous external abort (NOC SLVERR, ESR 0x96001610).
+ *
+ * The EMAC wrapper's SGMII Tx→Rx loopback routes the internal Tx clock back to
+ * satisfy clk_rx_i.  Re-arm the wrapper loopback and FUNC_CLK_EN here in case
+ * the EMAC GDSC power-cycled between probe and open, resetting those wrapper
+ * registers to POR.
+ *
+ * Before touching any EMAC DMA register, read back XPCS SR_MII_CTRL via the
+ * direct XPCS APB mapping and confirm bit 14 (XPCS Tx→Rx loopback enable) is
+ * set.  If it is not, the clock path is still absent and the DMA readl would
+ * fault; return -EAGAIN so the caller knows the root cause.
+ */
+static int qcom_ethqos_nord_dma_reset(struct stmmac_priv *priv)
+{
+	struct qcom_ethqos *ethqos = priv->plat->bsp_priv;
+	struct device *dev = priv->device;
+	void __iomem *ioaddr = priv->ioaddr;
+	u32 value;
+
+	/* pm_runtime_resume_and_get() was called in stmmac_open; GDSC must be on */
+	if (WARN_ON(!pm_runtime_active(dev))) {
+		dev_err(dev, "EMAC GDSC not active; DMA reset skipped\n");
+		return -ENODEV;
+	}
+
+	if (ethqos->serdes_phy) {
+		/*
+		 * Force SerDes PLL re-calibration.  stmmac_open calls
+		 * stmmac_legacy_serdes_power_up() before __stmmac_open, so
+		 * power_count is already 1 and phy_power_on() alone would be
+		 * a no-op.  Use legacy_serdes_is_powered as the guard: power
+		 * off first (power_count 1→0, triggers hardware power-off),
+		 * then back on (power_count 0→1, triggers PLL calibration).
+		 * Without a live SerDes Tx clock the EMAC wrapper Tx→Rx
+		 * loopback has nothing to route as clk_rx_i, making all EMAC
+		 * DMA register accesses fault with NOC SLVERR.
+		 */
+		if (priv->legacy_serdes_is_powered)
+			phy_power_off(ethqos->serdes_phy);
+		phy_power_on(ethqos->serdes_phy);
+		/*
+		 * Configure SerDes for 10G USXGMII.  phy_set_speed is
+		 * unconditional (not refcounted) and always applies the
+		 * hardware configuration, ensuring the PLL is locked at the
+		 * right frequency before we try to route it as clk_rx_i.
+		 */
+		phy_set_speed(ethqos->serdes_phy, SPEED_10000);
+		priv->legacy_serdes_is_powered = true;
+	}
+
+	/* Re-arm EMAC wrapper Tx→Rx clock routing in case GDSC reset the registers */
+	qcom_ethqos_set_sgmii_loopback(ethqos, true);
+	ethqos_set_func_clk_en(ethqos);
+
+	/*
+	 * Verify the EMAC wrapper SGMII Tx→Rx loopback (SGMII_TX_TO_RX_LOOPBACK_EN
+	 * in EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4) is active before touching DMA
+	 * registers.  This loopback routes the SerDes Tx clock back as clk_rx_i;
+	 * without it any DMA register read causes a NOC SLVERR.
+	 *
+	 * Previously this check read the XPCS SR_MII_CTRL BMCR_LOOPBACK (bit 14),
+	 * which required the XPCS to be in USXGMII mode (rxc_always_on=true) and
+	 * triggered a TX fault loop with the switch.  The EMAC wrapper loopback is
+	 * the correct clk_rx_i source for Nord — no USXGMII involvement needed.
+	 */
+	{
+		u32 phy_ctrl1 = rgmii_readl(ethqos, EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4);
+
+		dev_info(dev, "EMAC wrapper PHY_CNTRL1_V4 = 0x%08x (loopback=%u)\n",
+			 phy_ctrl1,
+			 !!(phy_ctrl1 & SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN));
+		if (!(phy_ctrl1 & SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN)) {
+			dev_err(dev, "EMAC wrapper SGMII loopback not set; aborting DMA reset\n");
+			return -EAGAIN;
+		}
+		dev_info(dev, "EMAC wrapper loopback confirmed; attempting XGMAC DMA reset\n");
+	}
+	udelay(50);
+
+	value = readl(ioaddr + XGMAC_DMA_MODE);
+	writel(value | XGMAC_SWR, ioaddr + XGMAC_DMA_MODE);
+
+	return readl_poll_timeout(ioaddr + XGMAC_DMA_MODE, value,
+				  !(value & XGMAC_SWR), 0, 100000);
+}
+
 static int qcom_ethqos_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
@@ -854,6 +1218,11 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	case PHY_INTERFACE_MODE_RGMII_TXID:
 		plat_dat->fix_mac_speed = ethqos_fix_mac_speed_rgmii;
 		break;
+	case PHY_INTERFACE_MODE_USXGMII:
+	case PHY_INTERFACE_MODE_10GBASER:
+		plat_dat->fix_mac_speed = ethqos_fix_mac_speed_usxgmii;
+		plat_dat->mac_finish = ethqos_mac_finish_serdes;
+		break;
 	case PHY_INTERFACE_MODE_2500BASEX:
 	case PHY_INTERFACE_MODE_SGMII:
 		plat_dat->fix_mac_speed = ethqos_fix_mac_speed_sgmii;
@@ -871,11 +1240,34 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(ethqos->rgmii_base),
 				     "Failed to map rgmii resource\n");
 
+	/*
+	 * Map the XPCS APB window via the pcs-handle phandle so that
+	 * qcom_ethqos_nord_dma_reset can read SR_MII_CTRL (xpcs_base+0x4000)
+	 * directly without going through the MDIO translation stack.
+	 * Use devm_ioremap (not devm_ioremap_resource / devm_of_iomap) to avoid
+	 * -EBUSY: pcs-xpcs-qcom already holds an exclusive request on this region.
+	 */
+	{
+		struct device_node *xn = of_parse_phandle(dev->of_node, "pcs-handle", 0);
+
+		if (xn) {
+			struct resource res;
+
+			if (!of_address_to_resource(xn, 0, &res))
+				ethqos->xpcs_base = devm_ioremap(dev, res.start,
+								 resource_size(&res));
+			of_node_put(xn);
+			if (!ethqos->xpcs_base)
+				dev_warn(dev, "failed to ioremap XPCS base\n");
+		}
+	}
+
 	data = of_device_get_match_data(dev);
 	ethqos->rgmii_por = data->rgmii_por;
 	ethqos->num_rgmii_por = data->num_rgmii_por;
 	ethqos->rgmii_config_loopback_en = data->rgmii_config_loopback_en;
 	ethqos->has_emac_ge_3 = data->has_emac_ge_3;
+	ethqos->has_io_macro_ge_4 = data->has_io_macro_ge_4;
 	ethqos->needs_sgmii_loopback = data->needs_sgmii_loopback;
 
 	if (data->num_noc_clks) {
@@ -902,6 +1294,39 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(ethqos->serdes_phy),
 				     "Failed to get serdes phy\n");
 
+	ethqos->icc_cpu_mac = devm_of_icc_get(dev, "cpu-mac");
+	if (IS_ERR(ethqos->icc_cpu_mac))
+		return dev_err_probe(dev, PTR_ERR(ethqos->icc_cpu_mac),
+				     "Failed to get cpu-mac interconnect\n");
+
+	ethqos->icc_mac_mem = devm_of_icc_get(dev, "mac-mem");
+	if (IS_ERR(ethqos->icc_mac_mem))
+		return dev_err_probe(dev, PTR_ERR(ethqos->icc_mac_mem),
+				     "Failed to get mac-mem interconnect\n");
+
+	ethqos->icc_ahb2phy = devm_of_icc_get(dev, "ahb2phy");
+	if (IS_ERR(ethqos->icc_ahb2phy))
+		return dev_err_probe(dev, PTR_ERR(ethqos->icc_ahb2phy),
+				     "Failed to get ahb2phy interconnect\n");
+
+	if (ethqos->icc_cpu_mac) {
+		ret = icc_set_bw(ethqos->icc_cpu_mac, 0, INT_MAX);
+		if (ret)
+			dev_warn(dev, "cpu-mac icc_set_bw failed: %d\n", ret);
+	}
+
+	if (ethqos->icc_mac_mem) {
+		ret = icc_set_bw(ethqos->icc_mac_mem, 0, INT_MAX);
+		if (ret)
+			dev_warn(dev, "mac-mem icc_set_bw failed: %d\n", ret);
+	}
+
+	if (ethqos->icc_ahb2phy) {
+		ret = icc_set_bw(ethqos->icc_ahb2phy, 0, INT_MAX);
+		if (ret)
+			dev_warn(dev, "ahb2phy icc_set_bw failed: %d\n", ret);
+	}
+
 	ethqos_set_clk_tx_rate(ethqos, NULL, plat_dat->phy_interface,
 			       SPEED_1000);
 
@@ -918,34 +1343,55 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	plat_dat->set_clk_tx_rate = ethqos_set_clk_tx_rate;
 	plat_dat->dump_debug_regs = rgmii_dump;
 	plat_dat->ptp_clk_freq_config = ethqos_ptp_clk_freq_config;
-	plat_dat->core_type = DWMAC_CORE_GMAC4;
+	plat_dat->core_type = data->has_hdma ? DWMAC_CORE_XGMAC : DWMAC_CORE_GMAC4;
 	if (ethqos->has_emac_ge_3)
 		plat_dat->dwmac4_addrs = &data->dwmac4_addrs;
+	if (data->dwxgmac_addrs.dma_even_chan_base)
+		plat_dat->dwxgmac_addrs = &data->dwxgmac_addrs;
+	plat_dat->has_hdma = data->has_hdma;
+	if (data->has_hdma) {
+		qcom_ethqos_hdma_cfg(plat_dat, data);
+		plat_dat->fix_soc_reset = qcom_ethqos_nord_dma_reset;
+	}
+	if (data->axi_clk_rate)
+		plat_dat->clk_ref_rate = data->axi_clk_rate;
 	plat_dat->pmt = true;
 	if (of_property_read_bool(np, "snps,tso"))
 		plat_dat->flags |= STMMAC_FLAG_TSO_EN;
 	if (of_device_is_compatible(np, "qcom,qcs404-ethqos"))
 		plat_dat->flags |= STMMAC_FLAG_RX_CLK_RUNS_IN_LPI;
-	if (data->dma_addr_width)
+	if (ethqos->needs_sgmii_loopback)
+		plat_dat->flags |= STMMAC_FLAG_PCS_RXC_INDEPENDENT;
+	if (data->dma_addr_width) {
 		plat_dat->host_dma_width = data->dma_addr_width;
+		dev_info(dev, "host DMA address width set to %u bits\n",
+			 plat_dat->host_dma_width);
+	}
 
 	if (ethqos->serdes_phy) {
 		plat_dat->serdes_powerup = qcom_ethqos_serdes_powerup;
 		plat_dat->serdes_powerdown  = qcom_ethqos_serdes_powerdown;
 	}
 
-	/* Enable TSO on queue0 and enable TBS on rest of the queues */
-	for (i = 1; i < plat_dat->tx_queues_to_use; i++)
-		plat_dat->tx_queues_cfg[i].tbs_en = 1;
+	/*
+	 * TBS (Time-Based Scheduling) is intentionally disabled for Nord during
+	 * initial bringup.  TBS descriptors carry a 64-bit launch-time field that
+	 * sits adjacent to the buffer-address field in the HDMA enhanced descriptor
+	 * layout.  An uninitialized launch-time is misread by the DMA engine as a
+	 * buffer address, producing an unmapped IOVA (e.g. 0xfffffc000) that faults
+	 * the SMMU under SID 0x1202 when the adapter is reset.  Enable TBS here
+	 * once proper SO_TXTIME / PTP clock synchronization is in place.
+	 */
 
 	return devm_stmmac_pltfr_probe(pdev, plat_dat, &stmmac_res);
 }
 
 static const struct of_device_id qcom_ethqos_match[] = {
-	{ .compatible = "qcom,qcs404-ethqos", .data = &emac_v2_3_0_data},
-	{ .compatible = "qcom,sa8775p-ethqos", .data = &emac_v4_0_0_data},
+	{ .compatible = "qcom,qcs404-ethqos",   .data = &emac_v2_3_0_data},
+	{ .compatible = "qcom,nord-ethqos",     .data = &emac_nord_data},
+	{ .compatible = "qcom,sa8775p-ethqos",  .data = &emac_v4_0_0_data},
 	{ .compatible = "qcom,sc8280xp-ethqos", .data = &emac_v3_0_0_data},
-	{ .compatible = "qcom,shikra-ethqos", .data = &shikra_data},
+	{ .compatible = "qcom,shikra-ethqos",   .data = &shikra_data},
 	{ .compatible = "qcom,sm8150-ethqos", .data = &emac_v2_1_0_data},
 	{ }
 };
