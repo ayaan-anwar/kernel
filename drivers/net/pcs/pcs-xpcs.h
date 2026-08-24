@@ -78,6 +78,17 @@
 #define DW_VR_MII_C37_ANSGM_SP_1000		0x2
 #define DW_VR_MII_C37_ANSGM_SP_LNKSTS		BIT(4)
 
+/* USXGMII Clause 37 AN status bits (VR_MII_AN_INTR_STS bits [14:8]).
+ * These reflect the Tx_Config_Reg sent from PHY to MAC (Table 2-11).
+ */
+#define DW_VR_MII_AN_STS_USXGMII_SP		GENMASK(11, 9)
+#define DW_VR_MII_USXGMII_SP_10M		0x0
+#define DW_VR_MII_USXGMII_SP_100M		0x1
+#define DW_VR_MII_USXGMII_SP_1G		0x2
+#define DW_VR_MII_USXGMII_SP_10G		0x3
+#define DW_VR_MII_USXGMII_SP_2G5		0x4
+#define DW_VR_MII_USXGMII_SP_5G		0x5
+
 #define DW_VR_MII_EEE_MCTRL0		0x8006
 #define DW_VR_MII_EEE_LTX_EN			BIT(0)  /* LPI Tx Enable */
 #define DW_VR_MII_EEE_LRX_EN			BIT(1)  /* LPI Rx Enable */

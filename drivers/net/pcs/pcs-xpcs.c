@@ -288,6 +288,7 @@ static int xpcs_soft_reset(struct dw_xpcs *xpcs,
 	case DW_AN_C37_SGMII:
 	case DW_2500BASEX:
 	case DW_AN_C37_1000BASEX:
+	case DW_AN_C37_USXGMII:
 		dev = MDIO_MMD_VEND2;
 		break;
 	default:
@@ -355,6 +356,24 @@ static int xpcs_read_fault_c73(struct dw_xpcs *xpcs,
 	return 0;
 }
 
+/*
+ * Route Tx clocks back to Rx so the MAC can access its configuration registers
+ * before a PHY or switch supplies real Rx clocks.  USXGMII_EN must be set
+ * first; the loopback path is only functional when the PCS is in USXGMII mode.
+ * Called from pcs_pre_init() (enable) and xpcs_link_up() (disable).
+ */
+static int xpcs_loopback(struct dw_xpcs *xpcs, bool on)
+{
+	int ret;
+
+	ret = xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, DW_USXGMII_EN);
+	if (ret < 0)
+		return ret;
+
+	return xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, BMCR_LOOPBACK,
+			   on ? BMCR_LOOPBACK : 0);
+}
+
 static void xpcs_link_up_usxgmii(struct dw_xpcs *xpcs, int speed)
 {
 	int ret, speed_sel;
@@ -383,14 +402,13 @@ static void xpcs_link_up_usxgmii(struct dw_xpcs *xpcs, int speed)
 		return;
 	}
 
-	ret = xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, DW_USXGMII_EN);
-	if (ret < 0)
-		goto out;
-
 	ret = xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, DW_USXGMII_SS_MASK,
 			  speed_sel | DW_USXGMII_FULL);
 	if (ret < 0)
 		goto out;
+
+	/* §7.6 step 15: wait for XGMII clocks to stabilize */
+	udelay(1);
 
 	ret = xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_RST,
 			       DW_USXGMII_RST);
@@ -683,6 +701,7 @@ static unsigned int xpcs_inband_caps(struct phylink_pcs *pcs,
 
 	case DW_AN_C37_SGMII:
 	case DW_AN_C37_1000BASEX:
+	case DW_AN_C37_USXGMII:
 		return LINK_INBAND_DISABLE | LINK_INBAND_ENABLE;
 
 	case DW_10GBASER:
@@ -823,6 +842,63 @@ static int xpcs_config_aneg_c37_sgmii(struct dw_xpcs *xpcs,
 	return ret;
 }
 
+static int xpcs_config_aneg_c37_usxgmii(struct dw_xpcs *xpcs,
+					 unsigned int neg_mode)
+{
+	int ret, mdio_ctrl;
+	u16 mask, val;
+
+	/* §7.6 step 1: switch PCS to BASE-R mode */
+	ret = xpcs_modify(xpcs, MDIO_MMD_PCS, MDIO_CTRL2,
+			  MDIO_PCS_CTRL2_TYPE, MDIO_PCS_CTRL2_10GBR);
+	if (ret < 0)
+		return ret;
+
+	/* §7.6 step 2: enable USXGMII mode */
+	ret = xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, DW_USXGMII_EN);
+	if (ret < 0)
+		return ret;
+
+	/* §7.6 step 3: disable CL37 AN before reconfiguring */
+	mdio_ctrl = xpcs_read(xpcs, MDIO_MMD_VEND2, MII_BMCR);
+	if (mdio_ctrl < 0)
+		return mdio_ctrl;
+
+	if (mdio_ctrl & BMCR_ANENABLE) {
+		ret = xpcs_write(xpcs, MDIO_MMD_VEND2, MII_BMCR,
+				 mdio_ctrl & ~BMCR_ANENABLE);
+		if (ret < 0)
+			return ret;
+	}
+
+	/* §7.6 step 7: MAC-side USXGMII, no AN interrupt (polling) */
+	mask = DW_VR_MII_TX_CONFIG_MASK;
+	val = FIELD_PREP(DW_VR_MII_TX_CONFIG_MASK,
+			 DW_VR_MII_TX_CONFIG_MAC_SIDE_SGMII);
+
+	ret = xpcs_modify(xpcs, MDIO_MMD_VEND2, DW_VR_MII_AN_CTRL, mask, val);
+	if (ret < 0)
+		return ret;
+
+	/* §7.6 step 7: MAC_AUTO_SW lets HW auto-update speed after AN */
+	val = 0;
+	mask = DW_VR_MII_DIG_CTRL1_MAC_AUTO_SW;
+
+	if (neg_mode == PHYLINK_PCS_NEG_INBAND_ENABLED)
+		val = DW_VR_MII_DIG_CTRL1_MAC_AUTO_SW;
+
+	ret = xpcs_modify(xpcs, MDIO_MMD_VEND2, DW_VR_MII_DIG_CTRL1, mask, val);
+	if (ret < 0)
+		return ret;
+
+	/* §7.6 step 10: enable CL37 AN */
+	if (neg_mode == PHYLINK_PCS_NEG_INBAND_ENABLED)
+		ret = xpcs_write(xpcs, MDIO_MMD_VEND2, MII_BMCR,
+				 mdio_ctrl | BMCR_ANENABLE);
+
+	return ret;
+}
+
 static int xpcs_config_aneg_c37_1000basex(struct dw_xpcs *xpcs,
 					  unsigned int neg_mode,
 					  const unsigned long *advertising)
@@ -947,6 +1023,11 @@ static int xpcs_do_config(struct dw_xpcs *xpcs, phy_interface_t interface,
 	case DW_AN_C37_1000BASEX:
 		ret = xpcs_config_aneg_c37_1000basex(xpcs, neg_mode,
 						     advertising);
+		if (ret)
+			return ret;
+		break;
+	case DW_AN_C37_USXGMII:
+		ret = xpcs_config_aneg_c37_usxgmii(xpcs, neg_mode);
 		if (ret)
 			return ret;
 		break;
@@ -1118,6 +1199,59 @@ static int xpcs_get_state_c37_sgmii(struct dw_xpcs *xpcs,
 	return 0;
 }
 
+static int xpcs_get_state_c37_usxgmii(struct dw_xpcs *xpcs,
+				       struct phylink_link_state *state)
+{
+	int ret, speed;
+
+	state->link = false;
+
+	ret = xpcs_read(xpcs, MDIO_MMD_VEND2, DW_VR_MII_AN_INTR_STS);
+	if (ret < 0)
+		return ret;
+
+	/* Bit [0]: AN complete — link is up only when set */
+	if (!(ret & DW_VR_MII_AN_STS_C37_ANCMPLT_INTR))
+		return 0;
+
+	/* Bits [11:9]: speed per Table 2-11 (Tx_Config_Reg PHY→MAC) */
+	speed = FIELD_GET(DW_VR_MII_AN_STS_USXGMII_SP, ret);
+	switch (speed) {
+	case DW_VR_MII_USXGMII_SP_10M:
+		state->speed = SPEED_10;
+		break;
+	case DW_VR_MII_USXGMII_SP_100M:
+		state->speed = SPEED_100;
+		break;
+	case DW_VR_MII_USXGMII_SP_1G:
+		state->speed = SPEED_1000;
+		break;
+	case DW_VR_MII_USXGMII_SP_10G:
+		state->speed = SPEED_10000;
+		break;
+	case DW_VR_MII_USXGMII_SP_2G5:
+		state->speed = SPEED_2500;
+		break;
+	case DW_VR_MII_USXGMII_SP_5G:
+		state->speed = SPEED_5000;
+		break;
+	default:
+		state->speed = SPEED_UNKNOWN;
+		break;
+	}
+
+	/* USXGMII is full-duplex only per the databook */
+	state->duplex = DUPLEX_FULL;
+	state->link = true;
+	state->an_complete = true;
+
+	/* §7.6 step 13: clear AN complete interrupt */
+	xpcs_write(xpcs, MDIO_MMD_VEND2, DW_VR_MII_AN_INTR_STS,
+		   ret & ~DW_VR_MII_AN_STS_C37_ANCMPLT_INTR);
+
+	return 0;
+}
+
 static int xpcs_get_state_c37_1000basex(struct dw_xpcs *xpcs,
 					unsigned int neg_mode,
 					struct phylink_link_state *state)
@@ -1203,6 +1337,12 @@ static void xpcs_get_state(struct phylink_pcs *pcs, unsigned int neg_mode,
 			dev_err(&xpcs->mdiodev->dev, "%s returned %pe\n",
 				"xpcs_get_state_c37_sgmii", ERR_PTR(ret));
 		break;
+	case DW_AN_C37_USXGMII:
+		ret = xpcs_get_state_c37_usxgmii(xpcs, state);
+		if (ret)
+			dev_err(&xpcs->mdiodev->dev, "%s returned %pe\n",
+				"xpcs_get_state_c37_usxgmii", ERR_PTR(ret));
+		break;
 	case DW_AN_C37_1000BASEX:
 		ret = xpcs_get_state_c37_1000basex(xpcs, neg_mode, state);
 		if (ret)
@@ -1251,10 +1391,63 @@ static void xpcs_link_up_sgmii_1000basex(struct dw_xpcs *xpcs,
 			__func__, ERR_PTR(ret));
 }
 
+static int xpcs_pre_init(struct phylink_pcs *pcs)
+{
+	struct dw_xpcs *xpcs = phylink_pcs_to_xpcs(pcs);
+	int ret;
+
+	if (!pcs->rxc_always_on)
+		return 0;
+
+	ret = xpcs_loopback(xpcs, true);
+	if (!ret)
+		dev_info(&xpcs->mdiodev->dev, "Tx→Rx loopback enabled for MAC init\n");
+	return ret;
+}
+
 static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 			 phy_interface_t interface, int speed, int duplex)
 {
 	struct dw_xpcs *xpcs = phylink_pcs_to_xpcs(pcs);
+
+	switch (interface) {
+	case PHY_INTERFACE_MODE_10GBASER:
+	case PHY_INTERFACE_MODE_5GBASER: {
+		/*
+		 * Do NOT call xpcs_loopback(false) for 10GBASE-R/5GBASE-R.
+		 * xpcs_loopback() unconditionally sets USXGMII_EN before
+		 * clearing BMCR_LOOPBACK, creating a transient USXGMII-no-loopback
+		 * state that causes a Remote Fault from the switch partner.
+		 *
+		 * With the EMAC wrapper SGMII Tx→Rx loopback supplying clk_rx_i
+		 * (needs_sgmii_loopback=true in Nord platform data), the XPCS is
+		 * never put into USXGMII mode (rxc_always_on=false), so no fault
+		 * latch needs clearing.  Simply ensure USXG_EN=0 so the XPCS TX
+		 * encodes as 64B/66B, and clear any residual BMCR_LOOPBACK.
+		 * Do NOT do a PCS soft reset here: if the XPCS has already
+		 * acquired 10GBASE-R block lock from the switch, a reset would
+		 * interrupt that and force re-acquisition (~125 ms BER window),
+		 * keeping SR_XS_PCS_STS1 bit 7 (TX fault) set the entire time.
+		 */
+		xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, 0);
+		xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, BMCR_LOOPBACK, 0);
+		/* Set SR_XS_PCS_CTRL2 PCS type = BASE-R per §7.5.4 step 1. */
+		xpcs_modify(xpcs, MDIO_MMD_PCS, MDIO_CTRL2,
+			    MDIO_PCS_CTRL2_TYPE, MDIO_PCS_CTRL2_10GBR);
+		dev_info(&xpcs->mdiodev->dev,
+			 "10GBASE-R link-up: CTRL2=BASE-R, USXGMII_EN=0, PCS <NOT> power-cycled\n");
+		return;
+	}
+
+	default:
+		break;
+	}
+
+	/* Disable Tx→Rx loopback clock; PHY/switch supplies Rx clocks by now */
+	if (pcs->rxc_always_on) {
+		xpcs_loopback(xpcs, false);
+		dev_info(&xpcs->mdiodev->dev, "Tx→Rx loopback disabled at link-up\n");
+	}
 
 	switch (interface) {
 	case PHY_INTERFACE_MODE_USXGMII:
@@ -1476,6 +1669,19 @@ static const struct dw_xpcs_compat nxp_sja1110_xpcs_compat[] = {
 	}
 };
 
+static const struct dw_xpcs_compat qcom_nord_xpcs_compat[] = {
+	{
+		.interface = PHY_INTERFACE_MODE_USXGMII,
+		.supported = xpcs_usxgmii_features,
+		.an_mode = DW_AN_C37_USXGMII,
+	}, {
+		.interface = PHY_INTERFACE_MODE_10GBASER,
+		.supported = xpcs_10gbaser_features,
+		.an_mode = DW_10GBASER,
+	}, {
+	}
+};
+
 static const struct dw_xpcs_desc xpcs_desc_list[] = {
 	{
 		.id = DW_XPCS_ID,
@@ -1489,6 +1695,10 @@ static const struct dw_xpcs_desc xpcs_desc_list[] = {
 		.id = NXP_SJA1110_XPCS_ID,
 		.mask = DW_XPCS_ID_MASK,
 		.compat = nxp_sja1110_xpcs_compat,
+	}, {
+		.id = QCOM_NORD_XPCS_ID,
+		.mask = DW_XPCS_ID_MASK,
+		.compat = qcom_nord_xpcs_compat,
 	},
 };
 
@@ -1496,6 +1706,7 @@ static const struct phylink_pcs_ops xpcs_phylink_ops = {
 	.pcs_validate = xpcs_validate,
 	.pcs_inband_caps = xpcs_inband_caps,
 	.pcs_pre_config = xpcs_pre_config,
+	.pcs_pre_init = xpcs_pre_init,
 	.pcs_config = xpcs_config,
 	.pcs_get_state = xpcs_get_state,
 	.pcs_an_restart = xpcs_an_restart,
