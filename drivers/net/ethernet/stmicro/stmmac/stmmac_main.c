@@ -50,6 +50,7 @@
 #include "stmmac.h"
 #include "stmmac_pcs.h"
 #include "stmmac_xdp.h"
+#include "dw25gmac.h"
 #include <linux/reset.h>
 #include <linux/of_mdio.h>
 #include "dwmac1000.h"
@@ -1083,7 +1084,9 @@ static void stmmac_mac_link_up(struct phylink_config *config,
 	old_ctrl = readl(priv->ioaddr + MAC_CTRL_REG);
 	ctrl = old_ctrl & ~priv->hw->link.speed_mask;
 
-	if (interface == PHY_INTERFACE_MODE_USXGMII) {
+	if (interface == PHY_INTERFACE_MODE_USXGMII ||
+	    interface == PHY_INTERFACE_MODE_10GBASER ||
+	    interface == PHY_INTERFACE_MODE_5GBASER) {
 		switch (speed) {
 		case SPEED_10000:
 			ctrl |= priv->hw->link.xgmii.speed10000;
@@ -1396,8 +1399,13 @@ static int stmmac_phylink_setup(struct stmmac_priv *priv)
 	config->type = PHYLINK_NETDEV;
 	config->mac_managed_pm = true;
 
-	/* Stmmac always requires an RX clock for hardware initialization */
-	config->mac_requires_rxc = true;
+	/* Stmmac always requires an RX clock for hardware initialization.
+	 * Platforms that supply clk_rx_i independently (e.g. via an EMAC
+	 * wrapper SGMII Tx→Rx loopback) can opt out so the XPCS is not
+	 * placed in USXGMII mode on their behalf.
+	 */
+	if (!(priv->plat->flags & STMMAC_FLAG_PCS_RXC_INDEPENDENT))
+		config->mac_requires_rxc = true;
 
 	/* Disable EEE RX clock stop to ensure VLAN register access works
 	 * correctly.
@@ -3321,6 +3329,29 @@ static int stmmac_init_dma_engine(struct stmmac_priv *priv)
 		stmmac_set_queue_tx_tail_ptr(priv, tx_q, chan, 0);
 	}
 
+	/*
+	 * DW25GMAC (HDMA) requires all VDMA channels — both enabled and
+	 * offline (hardware-supported but not enabled) — to have valid
+	 * PDMA/VDMA→TC mappings before desc_cache_compute is triggered.
+	 * Without this, offline channels carry garbage TxDescCtrl/RxDescCtrl
+	 * values that corrupt the descriptor cache layout for ALL channels,
+	 * leaving active TX VDMA channels without valid cache entries and
+	 * causing DMA descriptors to stall with OWN=1.
+	 */
+	if (priv->plat->has_hdma) {
+		u32 rx_sup = priv->dma_cap.number_rx_channel;
+		u32 tx_sup = priv->dma_cap.number_tx_channel;
+		u32 och;
+
+		for (och = rx_channels_count; och < rx_sup; och++)
+			dw25gmac_dma_map_rx_offline_chan(priv, priv->ioaddr,
+							 priv->plat->dma_cfg, och);
+		for (och = tx_channels_count; och < tx_sup; och++)
+			dw25gmac_dma_map_tx_offline_chan(priv, priv->ioaddr,
+							 priv->plat->dma_cfg, och);
+		dw25gmac_desc_cache_compute(priv->ioaddr);
+	}
+
 	return ret;
 }
 
@@ -3654,7 +3685,10 @@ static int stmmac_hw_setup(struct net_device *dev)
 	int ret;
 
 	/* Make sure RX clock is enabled */
-	if (priv->hw->phylink_pcs)
+	if (priv->hw->xpcs)
+		phylink_pcs_pre_init(priv->phylink,
+				     xpcs_to_phylink_pcs(priv->hw->xpcs));
+	else if (priv->hw->phylink_pcs)
 		phylink_pcs_pre_init(priv->phylink, priv->hw->phylink_pcs);
 
 	/* Note that clk_rx_i must be running for reset to complete. This
