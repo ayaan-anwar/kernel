@@ -1435,20 +1435,16 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 		xpcs_modify(xpcs, MDIO_MMD_PCS, MDIO_CTRL2,
 			    MDIO_PCS_CTRL2_TYPE, MDIO_PCS_CTRL2_10GBR);
 		/*
-		 * §7.5.4 specifies a power-down/up cycle (LPEN bit 11) to
-		 * flush the TX fault latch after a USXGMII→10GBASE-R switch.
-		 * However, with rxc_always_on=false (STMMAC_FLAG_PCS_RXC_INDEPENDENT)
-		 * the XPCS is never put into USXGMII mode during MAC init — the
-		 * EMAC wrapper SGMII loopback supplies clk_rx_i instead.  The
-		 * XPCS starts in its hardware default (10GBASE-R, USXG_EN=0),
-		 * achieves block lock from the switch, and the TX fault latch
-		 * is never set.  The LPEN power cycle here would be a no-op for
-		 * the fault latch but would force the XPCS RX to re-acquire
-		 * block lock from scratch, temporarily stalling incoming traffic.
-		 * Skip it; the writes above are the complete §7.5.4 sequence.
+		 * §7.5.4 steps 3-4: power-down/up cycle to reset the PCS
+		 * TX state machine and clear the TX fault latch
+		 * (SR_XS_PCS_STS1 bit 7).  BMCR_RESET (bit 15) does not
+		 * clear the fault; only the LPEN (bit 11) power cycle does.
 		 */
+		xpcs_modify(xpcs, MDIO_MMD_PCS, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
+		udelay(10);
+		xpcs_modify(xpcs, MDIO_MMD_PCS, MII_BMCR, BMCR_PDOWN, 0);
 		dev_info(&xpcs->mdiodev->dev,
-			 "10GBASE-R link-up: CTRL2=BASE-R, USXGMII_EN=0\n");
+			 "10GBASE-R link-up: CTRL2=BASE-R, USXGMII_EN=0, PCS power-cycled\n");
 		return;
 	}
 
