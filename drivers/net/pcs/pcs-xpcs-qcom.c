@@ -143,12 +143,19 @@ static int qcom_xpcs_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(xpcs), "failed to register XPCS\n");
 
 	/*
-	 * Nord XPCS needs a Tx→Rx clock loopback as clk_rx_i source before the
-	 * switch supplies real Rx clocks.  rxc_always_on instructs pcs_pre_init()
-	 * to enable the loopback (via MII_BMCR BMCR_LOOPBACK) and xpcs_link_up()
-	 * to disable it once the physical link is established.
+	 * clk_rx_i for Nord's XGMAC DMA register access is supplied by the
+	 * EMAC wrapper SGMII Tx→Rx loopback (SGMII_TX_TO_RX_LOOPBACK_EN in
+	 * EMAC_WRAPPER_SGMII_PHY_CNTRL1), which is armed by the ethqos driver
+	 * via needs_sgmii_loopback=true long before the XPCS is involved.
+	 *
+	 * Do NOT set rxc_always_on here.  That flag causes pcs_pre_init() to
+	 * put the XPCS into USXGMII mode (USXGMII_EN=1) to source clk_rx_i
+	 * from the XPCS Tx→Rx loopback instead.  While in USXGMII mode the
+	 * XPCS TX drives USXGMII-framed data to the SerDes; a 10GBASE-R switch
+	 * partner receives invalid data, fires Remote Fault, and the XPCS
+	 * latches a TX fault (SR_XS_PCS_STS1 bit 7) that blocks all TX traffic
+	 * in an unbreakable fault loop regardless of subsequent mode switches.
 	 */
-	xpcs->pcs.rxc_always_on = true;
 
 	dev_info(dev, "XPCS registered, id=0x%08x\n", xpcs->mdiodev->addr);
 

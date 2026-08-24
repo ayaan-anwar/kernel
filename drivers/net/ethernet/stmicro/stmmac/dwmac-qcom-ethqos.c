@@ -1146,24 +1146,27 @@ static int qcom_ethqos_nord_dma_reset(struct stmmac_priv *priv)
 	ethqos_set_func_clk_en(ethqos);
 
 	/*
-	 * Read SR_MII_CTRL directly at xpcs_base + 0x4000 (physical 0x1A18000).
-	 * Check bit 14 — the raw XPCS loopback enable — before the first DMA read.
+	 * Verify the EMAC wrapper SGMII Tx→Rx loopback (SGMII_TX_TO_RX_LOOPBACK_EN
+	 * in EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4) is active before touching DMA
+	 * registers.  This loopback routes the SerDes Tx clock back as clk_rx_i;
+	 * without it any DMA register read causes a NOC SLVERR.
+	 *
+	 * Previously this check read the XPCS SR_MII_CTRL BMCR_LOOPBACK (bit 14),
+	 * which required the XPCS to be in USXGMII mode (rxc_always_on=true) and
+	 * triggered a TX fault loop with the switch.  The EMAC wrapper loopback is
+	 * the correct clk_rx_i source for Nord — no USXGMII involvement needed.
 	 */
-	if (ethqos->xpcs_base) {
-		u32 sr_mii_ctrl = readl(ethqos->xpcs_base + QCOM_XPCS_SR_MII_CTRL_OFF);
+	{
+		u32 phy_ctrl1 = rgmii_readl(ethqos, EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4);
 
-		dev_info(dev, "SR_MII_CTRL(0x1A18000) = 0x%08x (bit14=%u)\n",
-			 sr_mii_ctrl, !!(sr_mii_ctrl & BIT(14)));
-		if (!(sr_mii_ctrl & BIT(14))) {
-			dev_err(dev,
-				"XPCS SR_MII_CTRL=0x%08x: bit 14 (loopback) not set; "
-				"aborting DMA reset to avoid NOC fault\n",
-				sr_mii_ctrl);
+		dev_info(dev, "EMAC wrapper PHY_CNTRL1_V4 = 0x%08x (loopback=%u)\n",
+			 phy_ctrl1,
+			 !!(phy_ctrl1 & SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN));
+		if (!(phy_ctrl1 & SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN)) {
+			dev_err(dev, "EMAC wrapper SGMII loopback not set; aborting DMA reset\n");
 			return -EAGAIN;
 		}
-		dev_info(dev, "XPCS loopback confirmed; attempting XGMAC DMA reset\n");
-	} else {
-		dev_info(dev, "XPCS base not mapped; skipping bit-14 check, attempting XGMAC DMA reset\n");
+		dev_info(dev, "EMAC wrapper loopback confirmed; attempting XGMAC DMA reset\n");
 	}
 	udelay(50);
 
