@@ -9,6 +9,7 @@
 #include <linux/phy.h>
 #include <linux/phy/phy.h>
 #include <linux/interconnect.h>
+#include <linux/pcs/pcs-xpcs.h>
 
 #include "stmmac.h"
 #include "stmmac_platform.h"
