@@ -245,3 +245,12 @@ config PHY_QCOM_SGMII_ETH
 	help
 	  Enable this to support the internal SerDes/SGMII PHY on various
 	  Qualcomm chipsets.
+
+config PHY_QCOM_USXGMII_ETH
+	tristate "Qualcomm SA8797P USXGMII 10G SerDes PHY driver"
+	depends on OF && (ARCH_QCOM || COMPILE_TEST)
+	depends on HAS_IOMEM
+	select GENERIC_PHY
+	help
+	  Enable this to support the USXGMII 10G SerDes PHY on the
+	  Qualcomm SA8797P (Nord) SoC.
