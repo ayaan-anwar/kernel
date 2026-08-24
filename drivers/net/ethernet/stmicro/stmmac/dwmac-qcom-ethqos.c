@@ -5,11 +5,12 @@
 #include <linux/of.h>
 #include <linux/of_net.h>
 #include <linux/of_address.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/phy.h>
 #include <linux/phy/phy.h>
 #include <linux/interconnect.h>
-#include <linux/pcs/pcs-xpcs.h>
+#include <linux/pcs/pcs-xpcs-qcom-direct.h>
 
 #include "stmmac.h"
 #include "stmmac_platform.h"
@@ -162,6 +163,7 @@ struct qcom_ethqos {
 	struct platform_device *pdev;
 	void __iomem *rgmii_base;
 	void __iomem *xpcs_base;	/* direct XPCS APB window for SR_MII_CTRL readback */
+	struct phylink_pcs *xpcs_pcs;	/* direct driver (pcs-xpcs-qcom-direct) */
 	struct clk *link_clk;
 	struct phy *serdes_phy;
 	phy_interface_t phy_mode;
@@ -774,28 +776,21 @@ static void ethqos_fix_mac_speed_usxgmii(void *bsp_priv,
 					  unsigned int mode)
 {
 	struct qcom_ethqos *ethqos = bsp_priv;
-	struct net_device *ndev = dev_get_drvdata(&ethqos->pdev->dev);
-	struct stmmac_priv *priv = netdev_priv(ndev);
-	struct phylink_pcs *pcs;
 
 	ethqos->speed = speed;
 	ethqos_configure_usxgmii(ethqos);
 
 	/*
-	 * phylink does not call pcs_link_up() for fixed-link interfaces; it
-	 * resolves the link state directly from the DT fixed-link node without
-	 * going through the PCS get_state / link_up path.  Drive it manually
-	 * here so that xpcs_link_up() runs and clears USXGMII_EN (which was
-	 * set by pcs_pre_init() for the Tx→Rx clock loopback during DMA reset).
-	 * Without this, the XPCS encodes TX frames as USXGMII instead of pure
-	 * 10GBASE-R 64B/66B, and the switch discards every frame.
+	 * phylink does not call pcs_link_up() for fixed-link interfaces.
+	 * Drive the downstream VR_RST + speed selection + USXGMII_RST sequence
+	 * manually via the standalone direct XPCS driver so the TX encoder is
+	 * armed in 10GBASE-R 64B/66B mode before MAC TX is enabled.
 	 */
-	if (priv->hw->xpcs) {
-		pcs = xpcs_to_phylink_pcs(priv->hw->xpcs);
-		if (pcs->ops->pcs_link_up)
-			pcs->ops->pcs_link_up(pcs, PHYLINK_PCS_NEG_NONE,
-					      interface, speed, DUPLEX_FULL);
-	}
+	if (ethqos->xpcs_pcs && ethqos->xpcs_pcs->ops->pcs_link_up)
+		ethqos->xpcs_pcs->ops->pcs_link_up(ethqos->xpcs_pcs,
+						    PHYLINK_PCS_NEG_NONE,
+						    interface, speed,
+						    DUPLEX_FULL);
 }
 
 static void ethqos_fix_mac_speed_rgmii(void *bsp_priv,
@@ -1191,7 +1186,7 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	struct stmmac_resources stmmac_res;
 	struct device *dev = &pdev->dev;
 	struct qcom_ethqos *ethqos;
-	int ret, i;
+	int ret;
 
 	ret = stmmac_get_platform_resources(pdev, &stmmac_res);
 	if (ret)
@@ -1251,14 +1246,29 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		struct device_node *xn = of_parse_phandle(dev->of_node, "pcs-handle", 0);
 
 		if (xn) {
+			struct platform_device *xpcs_pdev;
 			struct resource res;
 
 			if (!of_address_to_resource(xn, 0, &res))
 				ethqos->xpcs_base = devm_ioremap(dev, res.start,
 								 resource_size(&res));
-			of_node_put(xn);
 			if (!ethqos->xpcs_base)
 				dev_warn(dev, "failed to ioremap XPCS base\n");
+
+			/* Get phylink_pcs from the standalone direct driver */
+			xpcs_pdev = of_find_device_by_node(xn);
+			if (xpcs_pdev) {
+				ethqos->xpcs_pcs = qcom_xpcs_direct_get_pcs(xpcs_pdev);
+				if (IS_ERR(ethqos->xpcs_pcs)) {
+					dev_warn(dev, "XPCS direct driver not ready: %pe\n",
+						 ethqos->xpcs_pcs);
+					ethqos->xpcs_pcs = NULL;
+				} else {
+					dev_info(dev, "XPCS direct driver acquired\n");
+				}
+				put_device(&xpcs_pdev->dev);
+			}
+			of_node_put(xn);
 		}
 	}
 
