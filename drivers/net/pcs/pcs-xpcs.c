@@ -1430,6 +1430,17 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 		 * avoids exposing the bad intermediate state to the link partner.
 		 */
 		xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, 0);
+		/*
+		 * Trigger PCS datapath re-initialization (DW_USXGMII_RST = bit 10
+		 * of VR_XS_PCS_DIG_CTRL1) to kick the 10GBASE-R TX state machine
+		 * into clean operation after the USXGMII→10GBASE-R mode switch.
+		 * The bit is self-clearing (vendor sequence, analogous to step 15
+		 * in the XPCS §7.6 USXGMII switch procedure).  Without it the
+		 * TX encoder may stay in an indeterminate post-USXGMII state and
+		 * the switch partner keeps sending Remote Fault indefinitely.
+		 */
+		xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_RST, DW_USXGMII_RST);
+		udelay(10);
 		xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, BMCR_LOOPBACK, 0);
 		dev_info(&xpcs->mdiodev->dev,
 			 "10GBASE-R link-up: cleared USXGMII_EN and loopback\n");
