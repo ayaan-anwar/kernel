@@ -102,12 +102,13 @@ static int se_gcc_nord_emac_branch_enable(struct clk_hw *hw)
 	emac_br = to_se_gcc_nord_emac_branch(hw);
 	br = &emac_br->branch;
 
-	ret = regmap_update_bits(br->clkr.regmap, emac_br->mux_reg,
-				 SE_GCC_EMAC_SGMIIPHY_MUX_SEL_MASK,
-				 SE_GCC_EMAC_SGMIIPHY_MUX_SRC_RESET);
-	if (ret)
-		return ret;
-
+	/*
+	 * gearvm CLK-ON sequence: ENABLE first (the mux defaults to the reset
+	 * source after power-on, so no explicit pre-switch needed), then switch
+	 * to the active (SerDes-derived) source.  Pre-switching to the reset
+	 * source before enabling causes -EBUSY at XPCS probe time because the
+	 * clock cannot become active with source 2 in that context.
+	 */
 	ret = clk_enable_regmap(hw);
 	if (ret)
 		return ret;
