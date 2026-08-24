@@ -3,7 +3,9 @@
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
+#include <linux/bitfield.h>
 #include <linux/clk-provider.h>
+#include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -33,6 +35,118 @@ enum {
 	P_SE_GCC_GPLL4_OUT_MAIN,
 	P_SE_GCC_GPLL5_OUT_MAIN,
 	P_SLEEP_CLK,
+};
+
+#define SE_GCC_EMAC_SGMIIPHY_MUX_SEL_MASK	0x3
+#define SE_GCC_EMAC_SGMIIPHY_MUX_SRC_ACTIVE	0x0
+#define SE_GCC_EMAC_SGMIIPHY_MUX_SRC_RESET	0x2
+
+struct se_gcc_nord_emac_branch {
+	struct clk_branch branch;
+	u32 mux_reg;
+};
+
+#define to_se_gcc_nord_emac_branch(_hw) \
+	container_of(to_clk_regmap(_hw), struct se_gcc_nord_emac_branch, \
+		     branch.clkr)
+
+static bool se_gcc_nord_branch2_check_halt(const struct clk_branch *br,
+					  bool enabling)
+{
+	bool invert = br->halt_check & BRANCH_HALT_ENABLE;
+	u32 mask = CBCR_NOC_FSM_STATUS | CBCR_CLK_OFF;
+	u32 val;
+
+	regmap_read(br->clkr.regmap, br->halt_reg, &val);
+
+	if (enabling) {
+		val &= mask;
+		return (val & CBCR_CLK_OFF) == (invert ? CBCR_CLK_OFF : 0) ||
+			FIELD_GET(CBCR_NOC_FSM_STATUS, val) == FSM_STATUS_ON;
+	}
+
+	return (val & CBCR_CLK_OFF) == (invert ? 0 : CBCR_CLK_OFF);
+}
+
+static int se_gcc_nord_branch2_wait(const struct clk_branch *br, bool enabling)
+{
+	bool voted = br->halt_check & BRANCH_VOTED;
+	int count = 200;
+
+	if (br->halt_check == BRANCH_HALT_SKIP)
+		return 0;
+
+	if (br->halt_check == BRANCH_HALT_DELAY || (!enabling && voted)) {
+		udelay(10);
+		return 0;
+	}
+
+	while (count-- > 0) {
+		if (se_gcc_nord_branch2_check_halt(br, enabling))
+			return 0;
+		udelay(1);
+	}
+
+	WARN(1, "%s status stuck at 'o%s'", clk_hw_get_name(&br->clkr.hw),
+	     enabling ? "ff" : "n");
+
+	return -EBUSY;
+}
+
+static int se_gcc_nord_emac_branch_enable(struct clk_hw *hw)
+{
+	struct se_gcc_nord_emac_branch *emac_br;
+	struct clk_branch *br;
+	int ret;
+
+	emac_br = to_se_gcc_nord_emac_branch(hw);
+	br = &emac_br->branch;
+
+	ret = regmap_update_bits(br->clkr.regmap, emac_br->mux_reg,
+				 SE_GCC_EMAC_SGMIIPHY_MUX_SEL_MASK,
+				 SE_GCC_EMAC_SGMIIPHY_MUX_SRC_RESET);
+	if (ret)
+		return ret;
+
+	ret = clk_enable_regmap(hw);
+	if (ret)
+		return ret;
+
+	ret = se_gcc_nord_branch2_wait(br, true);
+	if (ret) {
+		clk_disable_regmap(hw);
+		return ret;
+	}
+
+	ret = regmap_update_bits(br->clkr.regmap, emac_br->mux_reg,
+				 SE_GCC_EMAC_SGMIIPHY_MUX_SEL_MASK,
+				 SE_GCC_EMAC_SGMIIPHY_MUX_SRC_ACTIVE);
+	if (ret)
+		clk_disable_regmap(hw);
+
+	return ret;
+}
+
+static void se_gcc_nord_emac_branch_disable(struct clk_hw *hw)
+{
+	struct se_gcc_nord_emac_branch *emac_br;
+	struct clk_branch *br;
+
+	emac_br = to_se_gcc_nord_emac_branch(hw);
+	br = &emac_br->branch;
+
+	regmap_update_bits(br->clkr.regmap, emac_br->mux_reg,
+			   SE_GCC_EMAC_SGMIIPHY_MUX_SEL_MASK,
+			   SE_GCC_EMAC_SGMIIPHY_MUX_SRC_RESET);
+
+	clk_disable_regmap(hw);
+	se_gcc_nord_branch2_wait(br, false);
+}
+
+static const struct clk_ops se_gcc_nord_emac_branch_ops = {
+	.enable = se_gcc_nord_emac_branch_enable,
+	.disable = se_gcc_nord_emac_branch_disable,
+	.is_enabled = clk_is_enabled_regmap,
 };
 
 static struct clk_alpha_pll se_gcc_gpll0 = {
@@ -754,28 +868,34 @@ static struct clk_branch se_gcc_emac0_axi_clk = {
 	},
 };
 
-static struct clk_branch se_gcc_emac0_cc_sgmiiphy_rx_clk = {
-	.halt_reg = 0x24064,
-	.halt_check = BRANCH_HALT,
-	.clkr = {
-		.enable_reg = 0x24064,
-		.enable_mask = BIT(0),
-		.hw.init = &(const struct clk_init_data) {
-			.name = "se_gcc_emac0_cc_sgmiiphy_rx_clk",
-			.ops = &clk_branch2_ops,
+static struct se_gcc_nord_emac_branch se_gcc_emac0_cc_sgmiiphy_rx_clk = {
+	.mux_reg = 0x24068,
+	.branch = {
+		.halt_reg = 0x24064,
+		.halt_check = BRANCH_HALT,
+		.clkr = {
+			.enable_reg = 0x24064,
+			.enable_mask = BIT(0),
+			.hw.init = &(const struct clk_init_data) {
+				.name = "se_gcc_emac0_cc_sgmiiphy_rx_clk",
+				.ops = &se_gcc_nord_emac_branch_ops,
+			},
 		},
 	},
 };
 
-static struct clk_branch se_gcc_emac0_cc_sgmiiphy_tx_clk = {
-	.halt_reg = 0x2405c,
-	.halt_check = BRANCH_HALT,
-	.clkr = {
-		.enable_reg = 0x2405c,
-		.enable_mask = BIT(0),
-		.hw.init = &(const struct clk_init_data) {
-			.name = "se_gcc_emac0_cc_sgmiiphy_tx_clk",
-			.ops = &clk_branch2_ops,
+static struct se_gcc_nord_emac_branch se_gcc_emac0_cc_sgmiiphy_tx_clk = {
+	.mux_reg = 0x24060,
+	.branch = {
+		.halt_reg = 0x2405c,
+		.halt_check = BRANCH_HALT,
+		.clkr = {
+			.enable_reg = 0x2405c,
+			.enable_mask = BIT(0),
+			.hw.init = &(const struct clk_init_data) {
+				.name = "se_gcc_emac0_cc_sgmiiphy_tx_clk",
+				.ops = &se_gcc_nord_emac_branch_ops,
+			},
 		},
 	},
 };
@@ -834,28 +954,34 @@ static struct clk_branch se_gcc_emac0_rgmii_clk = {
 	},
 };
 
-static struct clk_branch se_gcc_emac0_rpcs_rx_clk = {
-	.halt_reg = 0x240a8,
-	.halt_check = BRANCH_HALT,
-	.clkr = {
-		.enable_reg = 0x240a8,
-		.enable_mask = BIT(0),
-		.hw.init = &(const struct clk_init_data) {
-			.name = "se_gcc_emac0_rpcs_rx_clk",
-			.ops = &clk_branch2_ops,
+static struct se_gcc_nord_emac_branch se_gcc_emac0_rpcs_rx_clk = {
+	.mux_reg = 0x240a0,
+	.branch = {
+		.halt_reg = 0x240a8,
+		.halt_check = BRANCH_HALT,
+		.clkr = {
+			.enable_reg = 0x240a8,
+			.enable_mask = BIT(0),
+			.hw.init = &(const struct clk_init_data) {
+				.name = "se_gcc_emac0_rpcs_rx_clk",
+				.ops = &se_gcc_nord_emac_branch_ops,
+			},
 		},
 	},
 };
 
-static struct clk_branch se_gcc_emac0_rpcs_tx_clk = {
-	.halt_reg = 0x240a4,
-	.halt_check = BRANCH_HALT,
-	.clkr = {
-		.enable_reg = 0x240a4,
-		.enable_mask = BIT(0),
-		.hw.init = &(const struct clk_init_data) {
-			.name = "se_gcc_emac0_rpcs_tx_clk",
-			.ops = &clk_branch2_ops,
+static struct se_gcc_nord_emac_branch se_gcc_emac0_rpcs_tx_clk = {
+	.mux_reg = 0x2409c,
+	.branch = {
+		.halt_reg = 0x240a4,
+		.halt_check = BRANCH_HALT,
+		.clkr = {
+			.enable_reg = 0x240a4,
+			.enable_mask = BIT(0),
+			.hw.init = &(const struct clk_init_data) {
+				.name = "se_gcc_emac0_rpcs_tx_clk",
+				.ops = &se_gcc_nord_emac_branch_ops,
+			},
 		},
 	},
 };
@@ -901,28 +1027,34 @@ static struct clk_branch se_gcc_emac1_axi_clk = {
 	},
 };
 
-static struct clk_branch se_gcc_emac1_cc_sgmiiphy_rx_clk = {
-	.halt_reg = 0x25064,
-	.halt_check = BRANCH_HALT,
-	.clkr = {
-		.enable_reg = 0x25064,
-		.enable_mask = BIT(0),
-		.hw.init = &(const struct clk_init_data) {
-			.name = "se_gcc_emac1_cc_sgmiiphy_rx_clk",
-			.ops = &clk_branch2_ops,
+static struct se_gcc_nord_emac_branch se_gcc_emac1_cc_sgmiiphy_rx_clk = {
+	.mux_reg = 0x25068,
+	.branch = {
+		.halt_reg = 0x25064,
+		.halt_check = BRANCH_HALT,
+		.clkr = {
+			.enable_reg = 0x25064,
+			.enable_mask = BIT(0),
+			.hw.init = &(const struct clk_init_data) {
+				.name = "se_gcc_emac1_cc_sgmiiphy_rx_clk",
+				.ops = &se_gcc_nord_emac_branch_ops,
+			},
 		},
 	},
 };
 
-static struct clk_branch se_gcc_emac1_cc_sgmiiphy_tx_clk = {
-	.halt_reg = 0x2505c,
-	.halt_check = BRANCH_HALT,
-	.clkr = {
-		.enable_reg = 0x2505c,
-		.enable_mask = BIT(0),
-		.hw.init = &(const struct clk_init_data) {
-			.name = "se_gcc_emac1_cc_sgmiiphy_tx_clk",
-			.ops = &clk_branch2_ops,
+static struct se_gcc_nord_emac_branch se_gcc_emac1_cc_sgmiiphy_tx_clk = {
+	.mux_reg = 0x25060,
+	.branch = {
+		.halt_reg = 0x2505c,
+		.halt_check = BRANCH_HALT,
+		.clkr = {
+			.enable_reg = 0x2505c,
+			.enable_mask = BIT(0),
+			.hw.init = &(const struct clk_init_data) {
+				.name = "se_gcc_emac1_cc_sgmiiphy_tx_clk",
+				.ops = &se_gcc_nord_emac_branch_ops,
+			},
 		},
 	},
 };
@@ -981,28 +1113,34 @@ static struct clk_branch se_gcc_emac1_rgmii_clk = {
 	},
 };
 
-static struct clk_branch se_gcc_emac1_rpcs_rx_clk = {
-	.halt_reg = 0x250a8,
-	.halt_check = BRANCH_HALT,
-	.clkr = {
-		.enable_reg = 0x250a8,
-		.enable_mask = BIT(0),
-		.hw.init = &(const struct clk_init_data) {
-			.name = "se_gcc_emac1_rpcs_rx_clk",
-			.ops = &clk_branch2_ops,
+static struct se_gcc_nord_emac_branch se_gcc_emac1_rpcs_rx_clk = {
+	.mux_reg = 0x250a0,
+	.branch = {
+		.halt_reg = 0x250a8,
+		.halt_check = BRANCH_HALT,
+		.clkr = {
+			.enable_reg = 0x250a8,
+			.enable_mask = BIT(0),
+			.hw.init = &(const struct clk_init_data) {
+				.name = "se_gcc_emac1_rpcs_rx_clk",
+				.ops = &se_gcc_nord_emac_branch_ops,
+			},
 		},
 	},
 };
 
-static struct clk_branch se_gcc_emac1_rpcs_tx_clk = {
-	.halt_reg = 0x250a4,
-	.halt_check = BRANCH_HALT,
-	.clkr = {
-		.enable_reg = 0x250a4,
-		.enable_mask = BIT(0),
-		.hw.init = &(const struct clk_init_data) {
-			.name = "se_gcc_emac1_rpcs_tx_clk",
-			.ops = &clk_branch2_ops,
+static struct se_gcc_nord_emac_branch se_gcc_emac1_rpcs_tx_clk = {
+	.mux_reg = 0x2509c,
+	.branch = {
+		.halt_reg = 0x250a4,
+		.halt_check = BRANCH_HALT,
+		.clkr = {
+			.enable_reg = 0x250a4,
+			.enable_mask = BIT(0),
+			.hw.init = &(const struct clk_init_data) {
+				.name = "se_gcc_emac1_rpcs_tx_clk",
+				.ops = &se_gcc_nord_emac_branch_ops,
+			},
 		},
 	},
 };
@@ -1489,29 +1627,29 @@ static struct clk_regmap *se_gcc_nord_clocks[] = {
 	[SE_GCC_EEE_EMAC1_CLK] = &se_gcc_eee_emac1_clk.clkr,
 	[SE_GCC_EEE_EMAC1_CLK_SRC] = &se_gcc_eee_emac1_clk_src.clkr,
 	[SE_GCC_EMAC0_AXI_CLK] = &se_gcc_emac0_axi_clk.clkr,
-	[SE_GCC_EMAC0_CC_SGMIIPHY_RX_CLK] = &se_gcc_emac0_cc_sgmiiphy_rx_clk.clkr,
-	[SE_GCC_EMAC0_CC_SGMIIPHY_TX_CLK] = &se_gcc_emac0_cc_sgmiiphy_tx_clk.clkr,
+	[SE_GCC_EMAC0_CC_SGMIIPHY_RX_CLK] = &se_gcc_emac0_cc_sgmiiphy_rx_clk.branch.clkr,
+	[SE_GCC_EMAC0_CC_SGMIIPHY_TX_CLK] = &se_gcc_emac0_cc_sgmiiphy_tx_clk.branch.clkr,
 	[SE_GCC_EMAC0_PHY_AUX_CLK] = &se_gcc_emac0_phy_aux_clk.clkr,
 	[SE_GCC_EMAC0_PHY_AUX_CLK_SRC] = &se_gcc_emac0_phy_aux_clk_src.clkr,
 	[SE_GCC_EMAC0_PTP_CLK] = &se_gcc_emac0_ptp_clk.clkr,
 	[SE_GCC_EMAC0_PTP_CLK_SRC] = &se_gcc_emac0_ptp_clk_src.clkr,
 	[SE_GCC_EMAC0_RGMII_CLK] = &se_gcc_emac0_rgmii_clk.clkr,
 	[SE_GCC_EMAC0_RGMII_CLK_SRC] = &se_gcc_emac0_rgmii_clk_src.clkr,
-	[SE_GCC_EMAC0_RPCS_RX_CLK] = &se_gcc_emac0_rpcs_rx_clk.clkr,
-	[SE_GCC_EMAC0_RPCS_TX_CLK] = &se_gcc_emac0_rpcs_tx_clk.clkr,
+	[SE_GCC_EMAC0_RPCS_RX_CLK] = &se_gcc_emac0_rpcs_rx_clk.branch.clkr,
+	[SE_GCC_EMAC0_RPCS_TX_CLK] = &se_gcc_emac0_rpcs_tx_clk.branch.clkr,
 	[SE_GCC_EMAC0_XGXS_RX_CLK] = &se_gcc_emac0_xgxs_rx_clk.clkr,
 	[SE_GCC_EMAC0_XGXS_TX_CLK] = &se_gcc_emac0_xgxs_tx_clk.clkr,
 	[SE_GCC_EMAC1_AXI_CLK] = &se_gcc_emac1_axi_clk.clkr,
-	[SE_GCC_EMAC1_CC_SGMIIPHY_RX_CLK] = &se_gcc_emac1_cc_sgmiiphy_rx_clk.clkr,
-	[SE_GCC_EMAC1_CC_SGMIIPHY_TX_CLK] = &se_gcc_emac1_cc_sgmiiphy_tx_clk.clkr,
+	[SE_GCC_EMAC1_CC_SGMIIPHY_RX_CLK] = &se_gcc_emac1_cc_sgmiiphy_rx_clk.branch.clkr,
+	[SE_GCC_EMAC1_CC_SGMIIPHY_TX_CLK] = &se_gcc_emac1_cc_sgmiiphy_tx_clk.branch.clkr,
 	[SE_GCC_EMAC1_PHY_AUX_CLK] = &se_gcc_emac1_phy_aux_clk.clkr,
 	[SE_GCC_EMAC1_PHY_AUX_CLK_SRC] = &se_gcc_emac1_phy_aux_clk_src.clkr,
 	[SE_GCC_EMAC1_PTP_CLK] = &se_gcc_emac1_ptp_clk.clkr,
 	[SE_GCC_EMAC1_PTP_CLK_SRC] = &se_gcc_emac1_ptp_clk_src.clkr,
 	[SE_GCC_EMAC1_RGMII_CLK] = &se_gcc_emac1_rgmii_clk.clkr,
 	[SE_GCC_EMAC1_RGMII_CLK_SRC] = &se_gcc_emac1_rgmii_clk_src.clkr,
-	[SE_GCC_EMAC1_RPCS_RX_CLK] = &se_gcc_emac1_rpcs_rx_clk.clkr,
-	[SE_GCC_EMAC1_RPCS_TX_CLK] = &se_gcc_emac1_rpcs_tx_clk.clkr,
+	[SE_GCC_EMAC1_RPCS_RX_CLK] = &se_gcc_emac1_rpcs_rx_clk.branch.clkr,
+	[SE_GCC_EMAC1_RPCS_TX_CLK] = &se_gcc_emac1_rpcs_tx_clk.branch.clkr,
 	[SE_GCC_EMAC1_XGXS_RX_CLK] = &se_gcc_emac1_xgxs_rx_clk.clkr,
 	[SE_GCC_EMAC1_XGXS_TX_CLK] = &se_gcc_emac1_xgxs_tx_clk.clkr,
 	[SE_GCC_FRQ_MEASURE_REF_CLK] = &se_gcc_frq_measure_ref_clk.clkr,
