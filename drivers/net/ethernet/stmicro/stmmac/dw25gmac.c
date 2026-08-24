@@ -44,19 +44,6 @@ static void wr_dma_ch_ind(void __iomem *ioaddr, u8 mode, u32 channel, u32 val)
 	writel(reg_val, ioaddr + XXVGMAC_DMA_CH_IND_CONTROL);
 }
 
-static void dw25gmac_desc_cache_compute(void __iomem *ioaddr)
-{
-	u32 value;
-
-	value = readl(ioaddr + XGMAC_DMA_MODE);
-	value |= XXVGMAC_DSCB;
-	writel(value, ioaddr + XGMAC_DMA_MODE);
-
-	if (readl_poll_timeout(ioaddr + XGMAC_DMA_MODE, value,
-			       !(value & XXVGMAC_DSCB), 10, 200))
-		pr_warn("dw25gmac: timeout waiting for DSCB completion\n");
-}
-
 void dw25gmac_dma_init(void __iomem *ioaddr,
 		       struct stmmac_dma_cfg *dma_cfg)
 {
