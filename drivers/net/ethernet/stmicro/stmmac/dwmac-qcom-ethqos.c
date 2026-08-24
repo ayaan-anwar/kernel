@@ -1178,6 +1178,22 @@ static int qcom_ethqos_nord_dma_reset(struct stmmac_priv *priv)
 				  !(value & XGMAC_SWR), 0, 100000);
 }
 
+/*
+ * pcs_init callback: wire the direct XPCS phylink_pcs into stmmac so
+ * stmmac_pcs_setup() takes the pcs_init path instead of falling through
+ * to xpcs_create_fwnode().  xpcs_create_fwnode() calls
+ * fwnode_mdio_find_device() which returns NULL for a platform device
+ * (the direct driver does not register an MDIO device), producing an
+ * infinite -EPROBE_DEFER loop.
+ */
+static int ethqos_pcs_init(struct stmmac_priv *priv)
+{
+	struct qcom_ethqos *ethqos = priv->plat->bsp_priv;
+
+	priv->hw->phylink_pcs = ethqos->xpcs_pcs;
+	return 0;
+}
+
 static int qcom_ethqos_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
@@ -1382,6 +1398,9 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		plat_dat->serdes_powerup = qcom_ethqos_serdes_powerup;
 		plat_dat->serdes_powerdown  = qcom_ethqos_serdes_powerdown;
 	}
+
+	if (ethqos->xpcs_pcs)
+		plat_dat->pcs_init = ethqos_pcs_init;
 
 	/*
 	 * TBS (Time-Based Scheduling) is intentionally disabled for Nord during

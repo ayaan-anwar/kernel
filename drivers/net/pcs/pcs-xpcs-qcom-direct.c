@@ -270,6 +270,7 @@ static int qxd_probe(struct platform_device *pdev)
 	dev_info(dev, "XPCS APB mapped at %px\n", q->base);
 
 	q->pcs.ops      = &qxd_ops;
+	__set_bit(PHY_INTERFACE_MODE_10GBASER, q->pcs.supported_interfaces);
 
 	/*
 	 * Enable RPCS/XGXS clocks listed in the DT node.  The downstream
