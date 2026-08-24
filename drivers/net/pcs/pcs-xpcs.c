@@ -1434,17 +1434,8 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 		/* Set SR_XS_PCS_CTRL2 PCS type = BASE-R per §7.5.4 step 1. */
 		xpcs_modify(xpcs, MDIO_MMD_PCS, MDIO_CTRL2,
 			    MDIO_PCS_CTRL2_TYPE, MDIO_PCS_CTRL2_10GBR);
-		/*
-		 * §7.5.4 steps 3-4: power-down/up cycle to reset the PCS
-		 * TX state machine and clear the TX fault latch
-		 * (SR_XS_PCS_STS1 bit 7).  BMCR_RESET (bit 15) does not
-		 * clear the fault; only the LPEN (bit 11) power cycle does.
-		 */
-		xpcs_modify(xpcs, MDIO_MMD_PCS, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
-		udelay(10);
-		xpcs_modify(xpcs, MDIO_MMD_PCS, MII_BMCR, BMCR_PDOWN, 0);
 		dev_info(&xpcs->mdiodev->dev,
-			 "10GBASE-R link-up: CTRL2=BASE-R, USXGMII_EN=0, PCS power-cycled\n");
+			 "10GBASE-R link-up: CTRL2=BASE-R, USXGMII_EN=0, PCS <NOT> power-cycled\n");
 		return;
 	}
 
