@@ -1431,8 +1431,15 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 		 */
 		xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, 0);
 		xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, BMCR_LOOPBACK, 0);
+		/* Explicitly set SR_XS_PCS_CTRL2 PCS type to BASE-R (= 0).
+		 * xpcs_config() for DW_10GBASER never writes CTRL2; the USXGMII
+		 * path writes CTRL2 = 0 as its first step (§7.6 step 1) before
+		 * setting USXG_EN.  Mirror that here so the PCS type register is
+		 * correct regardless of prior state. */
+		xpcs_modify(xpcs, MDIO_MMD_PCS, MDIO_CTRL2,
+			    MDIO_PCS_CTRL2_TYPE, MDIO_PCS_CTRL2_10GBR);
 		dev_info(&xpcs->mdiodev->dev,
-			 "10GBASE-R link-up: verified USXGMII_EN=0\n");
+			 "10GBASE-R link-up: set PCS_CTRL2=BASE-R, USXGMII_EN=0\n");
 		return;
 	}
 
