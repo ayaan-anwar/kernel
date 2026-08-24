@@ -1410,6 +1410,35 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 {
 	struct dw_xpcs *xpcs = phylink_pcs_to_xpcs(pcs);
 
+	switch (interface) {
+	case PHY_INTERFACE_MODE_10GBASER:
+	case PHY_INTERFACE_MODE_5GBASER:
+		/*
+		 * Do NOT call xpcs_loopback(false) for 10GBASE-R/5GBASE-R.
+		 * xpcs_loopback() unconditionally sets USXGMII_EN (to enable the
+		 * loopback path) before clearing BMCR_LOOPBACK.  This creates a
+		 * transient state where the XPCS TX is in USXGMII mode with no
+		 * loopback — sending USXGMII-framed data directly to the SerDes.
+		 * A 10GBASE-R switch partner loses sync on this, fires a Remote
+		 * Fault ordered-set back to Nord, and the XPCS latches a TX fault
+		 * (SR_XS_PCS_STS1 bit 7) that persists and blocks all TX traffic.
+		 *
+		 * Safe sequence: clear USXG_EN first (puts PCS in 10GBASE-R while
+		 * BMCR_LOOPBACK is still routing TX internally), then clear
+		 * BMCR_LOOPBACK.  After USXG_EN=0 the loopback flag is a no-op in
+		 * 10GBASE-R mode anyway, so this is functionally equivalent but
+		 * avoids exposing the bad intermediate state to the link partner.
+		 */
+		xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, 0);
+		xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, BMCR_LOOPBACK, 0);
+		dev_info(&xpcs->mdiodev->dev,
+			 "10GBASE-R link-up: cleared USXGMII_EN and loopback\n");
+		return;
+
+	default:
+		break;
+	}
+
 	/* Disable Tx→Rx loopback clock; PHY/switch supplies Rx clocks by now */
 	if (pcs->rxc_always_on) {
 		xpcs_loopback(xpcs, false);
@@ -1425,25 +1454,6 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 	case PHY_INTERFACE_MODE_1000BASEX:
 		xpcs_link_up_sgmii_1000basex(xpcs, neg_mode, interface, speed,
 					     duplex);
-		break;
-
-	case PHY_INTERFACE_MODE_10GBASER:
-	case PHY_INTERFACE_MODE_5GBASER:
-		/*
-		 * xpcs_loopback() above force-sets USXGMII_EN in vpcs MDIO_CTRL1
-		 * to satisfy the loopback path during MAC init.  For 10GBASE-R /
-		 * 5GBASE-R, USXGMII_EN must be 0: the PCS must encode TX frames
-		 * as pure 64B/66B, not USXGMII (rate-adaptor + XGI header).  A
-		 * switch port at 10GBASE-R fixed-link will discard all frames
-		 * carrying USXGMII framing.
-		 *
-		 * Also ensure BMCR_LOOPBACK in SR_MII_CTRL is cleared; enabling
-		 * USXGMII_EN can trigger USXGMII AN which may re-arm it.
-		 */
-		xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, 0);
-		xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, BMCR_LOOPBACK, 0);
-		dev_info(&xpcs->mdiodev->dev,
-			 "10GBASE-R link-up: cleared USXGMII_EN and loopback\n");
 		break;
 
 	default:
