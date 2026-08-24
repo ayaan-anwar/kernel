@@ -756,9 +756,15 @@ static int ethqos_configure_usxgmii(struct qcom_ethqos *ethqos)
 		return -EINVAL;
 	}
 
-	/* Re-enable USXGMII clock block */
-	rgmii_updatel(ethqos, USXGMII_CLK_BLK_CLK_EN, USXGMII_CLK_BLK_CLK_EN,
-		      EMAC_WRAPPER_USXGMII_MUX_SEL);
+	/*
+	 * Keep USXGMII_CLK_BLK_CLK_EN cleared.  Downstream and the Nord HPG
+	 * program this bit to 0; setting it back to 1 leaves the wrapper at
+	 * 0x3 instead of the expected 0x2 after 10G configuration and the link
+	 * reports up without passing packets.
+	 */
+	dev_info(dev, "USXGMII wrapper configured: mux=0x%08x phy_ctrl1=0x%08x\n",
+		 rgmii_readl(ethqos, EMAC_WRAPPER_USXGMII_MUX_SEL),
+		 rgmii_readl(ethqos, EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4));
 
 	return 0;
 }
