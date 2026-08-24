@@ -768,9 +768,28 @@ static void ethqos_fix_mac_speed_usxgmii(void *bsp_priv,
 					  unsigned int mode)
 {
 	struct qcom_ethqos *ethqos = bsp_priv;
+	struct net_device *ndev = dev_get_drvdata(&ethqos->pdev->dev);
+	struct stmmac_priv *priv = netdev_priv(ndev);
+	struct phylink_pcs *pcs;
 
 	ethqos->speed = speed;
 	ethqos_configure_usxgmii(ethqos);
+
+	/*
+	 * phylink does not call pcs_link_up() for fixed-link interfaces; it
+	 * resolves the link state directly from the DT fixed-link node without
+	 * going through the PCS get_state / link_up path.  Drive it manually
+	 * here so that xpcs_link_up() runs and clears USXGMII_EN (which was
+	 * set by pcs_pre_init() for the Tx→Rx clock loopback during DMA reset).
+	 * Without this, the XPCS encodes TX frames as USXGMII instead of pure
+	 * 10GBASE-R 64B/66B, and the switch discards every frame.
+	 */
+	if (priv->hw->xpcs) {
+		pcs = xpcs_to_phylink_pcs(priv->hw->xpcs);
+		if (pcs->ops->pcs_link_up)
+			pcs->ops->pcs_link_up(pcs, PHYLINK_PCS_NEG_NONE,
+					      interface, speed, DUPLEX_FULL);
+	}
 }
 
 static void ethqos_fix_mac_speed_rgmii(void *bsp_priv,
