@@ -251,6 +251,10 @@ enum dwmac_core_type {
 #define STMMAC_FLAG_HWTSTAMP_CORRECT_LATENCY	BIT(14)
 #define STMMAC_FLAG_KEEP_PREAMBLE_BEFORE_SFD	BIT(15)
 #define STMMAC_FLAG_SERDES_SUPPORTS_2500M	BIT(16)
+/* Platform supplies clk_rx_i independently (e.g. EMAC wrapper SGMII
+ * loopback); suppress the PCS-based rxc_always_on mechanism so the
+ * XPCS is not put into USXGMII mode during MAC hardware init. */
+#define STMMAC_FLAG_PCS_RXC_INDEPENDENT		BIT(17)
 
 struct mac_device_info;
 

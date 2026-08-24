@@ -1399,8 +1399,13 @@ static int stmmac_phylink_setup(struct stmmac_priv *priv)
 	config->type = PHYLINK_NETDEV;
 	config->mac_managed_pm = true;
 
-	/* Stmmac always requires an RX clock for hardware initialization */
-	config->mac_requires_rxc = true;
+	/* Stmmac always requires an RX clock for hardware initialization.
+	 * Platforms that supply clk_rx_i independently (e.g. via an EMAC
+	 * wrapper SGMII Tx→Rx loopback) can opt out so the XPCS is not
+	 * placed in USXGMII mode on their behalf.
+	 */
+	if (!(priv->plat->flags & STMMAC_FLAG_PCS_RXC_INDEPENDENT))
+		config->mac_requires_rxc = true;
 
 	/* Disable EEE RX clock stop to ensure VLAN register access works
 	 * correctly.
