@@ -226,6 +226,7 @@ static int qcom_dwmac_usxgmii_calibrate(struct phy *phy)
 		return -ETIMEDOUT;
 	}
 
+	dev_info(dev, "SerDes calibration OK: C_READY PCS_READY SGMIIPHY_READY PLL_LOCKED\n");
 	return 0;
 }
 
@@ -253,6 +254,8 @@ static int qcom_dwmac_usxgmii_power_on(struct phy *phy)
 		goto err_clk;
 
 	/* Deassert SerDes reset after supplies and clocks are stable. */
+	if (data->reset_gpio)
+		dev_info(&phy->dev, "deasserting SerDes reset GPIO\n");
 	gpiod_set_value_cansleep(data->reset_gpio, 0);
 	usleep_range(2000, 4000);
 
