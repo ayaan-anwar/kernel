@@ -1431,15 +1431,20 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 		 */
 		xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, 0);
 		xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, BMCR_LOOPBACK, 0);
-		/* Explicitly set SR_XS_PCS_CTRL2 PCS type to BASE-R (= 0).
-		 * xpcs_config() for DW_10GBASER never writes CTRL2; the USXGMII
-		 * path writes CTRL2 = 0 as its first step (§7.6 step 1) before
-		 * setting USXG_EN.  Mirror that here so the PCS type register is
-		 * correct regardless of prior state. */
+		/* Set SR_XS_PCS_CTRL2 PCS type = BASE-R per §7.5.4 step 1. */
 		xpcs_modify(xpcs, MDIO_MMD_PCS, MDIO_CTRL2,
 			    MDIO_PCS_CTRL2_TYPE, MDIO_PCS_CTRL2_10GBR);
+		/*
+		 * §7.5.4 steps 3-4: power-down/up cycle to reset the PCS
+		 * TX state machine and clear the TX fault latch
+		 * (SR_XS_PCS_STS1 bit 7).  BMCR_RESET (bit 15) does not
+		 * clear the fault; only the LPEN (bit 11) power cycle does.
+		 */
+		xpcs_modify(xpcs, MDIO_MMD_PCS, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
+		udelay(10);
+		xpcs_modify(xpcs, MDIO_MMD_PCS, MII_BMCR, BMCR_PDOWN, 0);
 		dev_info(&xpcs->mdiodev->dev,
-			 "10GBASE-R link-up: set PCS_CTRL2=BASE-R, USXGMII_EN=0\n");
+			 "10GBASE-R link-up: CTRL2=BASE-R, USXGMII_EN=0, PCS power-cycled\n");
 		return;
 	}
 
