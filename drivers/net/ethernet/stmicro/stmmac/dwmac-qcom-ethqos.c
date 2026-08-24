@@ -9,7 +9,6 @@
 #include <linux/phy.h>
 #include <linux/phy/phy.h>
 #include <linux/interconnect.h>
-#include <linux/pcs/pcs-xpcs.h>
 
 #include "stmmac.h"
 #include "stmmac_platform.h"
@@ -1174,24 +1173,6 @@ static int qcom_ethqos_nord_dma_reset(struct stmmac_priv *priv)
 				  !(value & XGMAC_SWR), 0, 100000);
 }
 
-/*
- * Return the DW XPCS as the active PCS for USXGMII / 10GBASE-R so phylink
- * calls pcs_config(), pcs_get_state(), and pcs_link_up() on it.
- *
- * stmmac_mac_select_pcs() only checks integrated_pcs (GMAC4/1000) and a
- * platform select_pcs callback; priv->hw->xpcs is not checked there.
- * Without this callback, phylink never calls xpcs_link_up(), leaving
- * USXGMII_EN set in VR_XS_PCS_DIG_CTRL1 and TX frames encoded as USXGMII
- * (rate-adaptor + XGI header) instead of pure 10GBASE-R 64B/66B.
- */
-static struct phylink_pcs *ethqos_select_pcs(struct stmmac_priv *priv,
-					     phy_interface_t interface)
-{
-	if (priv->hw->xpcs)
-		return xpcs_to_phylink_pcs(priv->hw->xpcs);
-	return ERR_PTR(-ENODEV);
-}
-
 static int qcom_ethqos_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
@@ -1231,7 +1212,6 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	case PHY_INTERFACE_MODE_10GBASER:
 		plat_dat->fix_mac_speed = ethqos_fix_mac_speed_usxgmii;
 		plat_dat->mac_finish = ethqos_mac_finish_serdes;
-		plat_dat->select_pcs = ethqos_select_pcs;
 		break;
 	case PHY_INTERFACE_MODE_2500BASEX:
 	case PHY_INTERFACE_MODE_SGMII:
