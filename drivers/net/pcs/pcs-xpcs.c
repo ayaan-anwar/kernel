@@ -1413,37 +1413,26 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 	switch (interface) {
 	case PHY_INTERFACE_MODE_10GBASER:
 	case PHY_INTERFACE_MODE_5GBASER: {
-		const struct dw_xpcs_compat *compat;
-
 		/*
 		 * Do NOT call xpcs_loopback(false) for 10GBASE-R/5GBASE-R.
-		 * xpcs_loopback() unconditionally sets USXGMII_EN (to enable the
-		 * loopback path) before clearing BMCR_LOOPBACK.  This creates a
-		 * transient state where the XPCS TX is in USXGMII mode with no
-		 * loopback — sending USXGMII-framed data directly to the SerDes.
-		 * A 10GBASE-R switch partner loses sync on this, fires a Remote
-		 * Fault ordered-set back to Nord, and the XPCS latches a TX fault
-		 * (SR_XS_PCS_STS1 bit 7) that persists and blocks all TX traffic.
+		 * xpcs_loopback() unconditionally sets USXGMII_EN before
+		 * clearing BMCR_LOOPBACK, creating a transient USXGMII-no-loopback
+		 * state that causes a Remote Fault from the switch partner.
 		 *
-		 * Correct sequence:
-		 * 1. Clear USXG_EN → PCS enters 10GBASE-R mode while
-		 *    BMCR_LOOPBACK is still routing TX internally.
-		 * 2. PCS soft reset (BMCR_RESET to MDIO_MMD_PCS) to flush the
-		 *    TX fault latch accumulated during the USXGMII init period.
-		 *    After reset the XPCS TX outputs clean 10GBASE-R idle chars;
-		 *    the switch stops sending Remote Fault and traffic can flow.
-		 *    Note: DW_USXGMII_RST (bit 10) is USXGMII-specific and is a
-		 *    no-op in 10GBASE-R mode; only a standard PCS soft reset
-		 *    clears the 10GBASE-R fault domain.
-		 * 3. Clear BMCR_LOOPBACK (VEND2 may survive the PCS reset).
+		 * With the EMAC wrapper SGMII Tx→Rx loopback supplying clk_rx_i
+		 * (needs_sgmii_loopback=true in Nord platform data), the XPCS is
+		 * never put into USXGMII mode (rxc_always_on=false), so no fault
+		 * latch needs clearing.  Simply ensure USXG_EN=0 so the XPCS TX
+		 * encodes as 64B/66B, and clear any residual BMCR_LOOPBACK.
+		 * Do NOT do a PCS soft reset here: if the XPCS has already
+		 * acquired 10GBASE-R block lock from the switch, a reset would
+		 * interrupt that and force re-acquisition (~125 ms BER window),
+		 * keeping SR_XS_PCS_STS1 bit 7 (TX fault) set the entire time.
 		 */
 		xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, 0);
-		compat = xpcs_find_compat(xpcs, interface);
-		if (compat)
-			xpcs_soft_reset(xpcs, compat);
 		xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, BMCR_LOOPBACK, 0);
 		dev_info(&xpcs->mdiodev->dev,
-			 "10GBASE-R link-up: cleared USXGMII_EN, soft reset, cleared loopback\n");
+			 "10GBASE-R link-up: verified USXGMII_EN=0\n");
 		return;
 	}
 
