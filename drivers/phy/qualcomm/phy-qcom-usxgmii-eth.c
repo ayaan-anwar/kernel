@@ -219,6 +219,13 @@ static int qcom_dwmac_usxgmii_calibrate(struct phy *phy)
 		return -ETIMEDOUT;
 	}
 
+	if (qcom_dwmac_usxgmii_poll_status(rm,
+					    QSERDES_COM_BASE + QSERDES_V7_COM_CMN_STATUS,
+					    BIT(1))) {
+		dev_err(dev, "SerDes PLL lock timed out\n");
+		return -ETIMEDOUT;
+	}
+
 	return 0;
 }
 

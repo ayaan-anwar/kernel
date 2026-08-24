@@ -1427,6 +1427,25 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 					     duplex);
 		break;
 
+	case PHY_INTERFACE_MODE_10GBASER:
+	case PHY_INTERFACE_MODE_5GBASER:
+		/*
+		 * xpcs_loopback() above force-sets USXGMII_EN in vpcs MDIO_CTRL1
+		 * to satisfy the loopback path during MAC init.  For 10GBASE-R /
+		 * 5GBASE-R, USXGMII_EN must be 0: the PCS must encode TX frames
+		 * as pure 64B/66B, not USXGMII (rate-adaptor + XGI header).  A
+		 * switch port at 10GBASE-R fixed-link will discard all frames
+		 * carrying USXGMII framing.
+		 *
+		 * Also ensure BMCR_LOOPBACK in SR_MII_CTRL is cleared; enabling
+		 * USXGMII_EN can trigger USXGMII AN which may re-arm it.
+		 */
+		xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, 0);
+		xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, BMCR_LOOPBACK, 0);
+		dev_info(&xpcs->mdiodev->dev,
+			 "10GBASE-R link-up: cleared USXGMII_EN and loopback\n");
+		break;
+
 	default:
 		break;
 	}
