@@ -1412,7 +1412,9 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 
 	switch (interface) {
 	case PHY_INTERFACE_MODE_10GBASER:
-	case PHY_INTERFACE_MODE_5GBASER:
+	case PHY_INTERFACE_MODE_5GBASER: {
+		const struct dw_xpcs_compat *compat;
+
 		/*
 		 * Do NOT call xpcs_loopback(false) for 10GBASE-R/5GBASE-R.
 		 * xpcs_loopback() unconditionally sets USXGMII_EN (to enable the
@@ -1423,28 +1425,27 @@ static void xpcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 		 * Fault ordered-set back to Nord, and the XPCS latches a TX fault
 		 * (SR_XS_PCS_STS1 bit 7) that persists and blocks all TX traffic.
 		 *
-		 * Safe sequence: clear USXG_EN first (puts PCS in 10GBASE-R while
-		 * BMCR_LOOPBACK is still routing TX internally), then clear
-		 * BMCR_LOOPBACK.  After USXG_EN=0 the loopback flag is a no-op in
-		 * 10GBASE-R mode anyway, so this is functionally equivalent but
-		 * avoids exposing the bad intermediate state to the link partner.
+		 * Correct sequence:
+		 * 1. Clear USXG_EN → PCS enters 10GBASE-R mode while
+		 *    BMCR_LOOPBACK is still routing TX internally.
+		 * 2. PCS soft reset (BMCR_RESET to MDIO_MMD_PCS) to flush the
+		 *    TX fault latch accumulated during the USXGMII init period.
+		 *    After reset the XPCS TX outputs clean 10GBASE-R idle chars;
+		 *    the switch stops sending Remote Fault and traffic can flow.
+		 *    Note: DW_USXGMII_RST (bit 10) is USXGMII-specific and is a
+		 *    no-op in 10GBASE-R mode; only a standard PCS soft reset
+		 *    clears the 10GBASE-R fault domain.
+		 * 3. Clear BMCR_LOOPBACK (VEND2 may survive the PCS reset).
 		 */
 		xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_EN, 0);
-		/*
-		 * Trigger PCS datapath re-initialization (DW_USXGMII_RST = bit 10
-		 * of VR_XS_PCS_DIG_CTRL1) to kick the 10GBASE-R TX state machine
-		 * into clean operation after the USXGMII→10GBASE-R mode switch.
-		 * The bit is self-clearing (vendor sequence, analogous to step 15
-		 * in the XPCS §7.6 USXGMII switch procedure).  Without it the
-		 * TX encoder may stay in an indeterminate post-USXGMII state and
-		 * the switch partner keeps sending Remote Fault indefinitely.
-		 */
-		xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_RST, DW_USXGMII_RST);
-		udelay(10);
+		compat = xpcs_find_compat(xpcs, interface);
+		if (compat)
+			xpcs_soft_reset(xpcs, compat);
 		xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR, BMCR_LOOPBACK, 0);
 		dev_info(&xpcs->mdiodev->dev,
-			 "10GBASE-R link-up: cleared USXGMII_EN and loopback\n");
+			 "10GBASE-R link-up: cleared USXGMII_EN, soft reset, cleared loopback\n");
 		return;
+	}
 
 	default:
 		break;
