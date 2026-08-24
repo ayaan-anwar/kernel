@@ -419,11 +419,16 @@ static const struct ethqos_emac_driver_data shikra_data = {
 };
 
 /*
- * Nord (SA8797p) — USXGMII only, no RGMII IO macro POR values needed.
+ * Nord (SA8797p) — IO macro power-on-reset values.  Written at the start of
+ * ethqos_configure_usxgmii() to bring the IO macro to a known state before
+ * programming.  Values from downstream emac_v6_6_0_por (Gerrit 5939193).
  */
 static const struct ethqos_emac_por emac_nord_por[] = {
 	{ .offset = RGMII_IO_MACRO_CONFIG,	.value = 0x00C04D03 },
 	{ .offset = SDCC_HC_REG_DLL_CONFIG,	.value = 0x2004642C },
+	{ .offset = SDCC_HC_REG_DDR_CONFIG,	.value = 0x80040800 },
+	{ .offset = SDCC_HC_REG_DLL_CONFIG2,	.value = 0x00200000 },
+	{ .offset = SDCC_USR_CTL,		.value = 0x00010800 },
 	{ .offset = RGMII_IO_MACRO_CONFIG2,	.value = 0x00222060 },
 	{ .offset = RGMII_IO_MACRO_SCRATCH_2,	.value = 0x4c },
 };
@@ -439,6 +444,8 @@ static const u8 nord_rx_vdma_tc_map[]   = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 }
 static const u8 nord_tx_vdma_pdma_map[] = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 };
 static const u8 nord_rx_vdma_pdma_map[] = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 };
 static const struct ethqos_emac_driver_data emac_nord_data = {
+	.rgmii_por	= emac_nord_por,
+	.num_rgmii_por	= ARRAY_SIZE(emac_nord_por),
 	.dma_addr_width = 40,
 	.link_clk_name = "phyaux",
 	.has_hdma = true,
