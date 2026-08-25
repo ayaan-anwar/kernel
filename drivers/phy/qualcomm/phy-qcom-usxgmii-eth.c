@@ -57,9 +57,14 @@
  * QREF CXO clock reference network — must be programmed before SerDes
  * calibration.  Source: GearVM tcsr_tlmm_phy.h / emac_phy_tcsr_tlmm_enable().
  *
- * TCSR QREF block base: 0x01FD5000 (absolute)
- * TLMM QREF block base: 0x0F1D8000 (absolute)
+ * TCSR QREF block base: 0x01FD5000 (absolute, within TCSR syscon)
+ * TLMM QREF block base: 0x0F1D8000 (absolute, within TLMM pinctrl)
+ *
+ * Both regions are already claimed by their respective subsystem drivers,
+ * so we ioremap without requesting the resource.  Both SerDes instances
+ * share the same TCSR block; only the per-PHY TLMM element offset differs.
  */
+#define TCSR_QREF_PHYS			0x01FD5000UL
 #define TCSR_QREF_SIZE			0x1000
 #define TCSR_QREFS_CXO_0_RPT0		0x00
 #define TCSR_QREFS_CXO_0_TX0		0x04
@@ -76,6 +81,7 @@
 #define TCSR_QREFS_CXO_0_RX5		0x78
 #define TCSR_QREFS_CXO_0_TX1		0x7C
 
+#define TLMM_QREF_PHYS			0x0F1D8000UL
 #define TLMM_QREF_SIZE			0x12000
 #define TLMM_QREF_PHY_SEL_0		0x0000
 /* Per-PHY block: offset = 0x1000 * (phy_index + 1) */
@@ -405,21 +411,23 @@ static int qcom_dwmac_usxgmii_probe(struct platform_device *pdev)
 	if (IS_ERR(data->regmap))
 		return PTR_ERR(data->regmap);
 
-	/* TCSR QREF block (resource 1) — optional, fall back to no-QREF */
-	data->tcsr_qref = devm_platform_ioremap_resource(pdev, 1);
-	if (IS_ERR(data->tcsr_qref)) {
-		dev_warn(dev, "no TCSR QREF resource, skipping QREF enable\n");
-		data->tcsr_qref = NULL;
-	}
-
-	/* TLMM QREF block (resource 2) */
-	data->tlmm_qref = devm_platform_ioremap_resource(pdev, 2);
-	if (IS_ERR(data->tlmm_qref))
-		data->tlmm_qref = NULL;
-
 	/* PHY index selects the per-PHY TLMM element (0=EMAC0, 1=EMAC1) */
 	if (of_property_read_u32(dev->of_node, "qcom,phy-index", &data->phy_index))
 		data->phy_index = 0;
+
+	/*
+	 * TCSR/TLMM QREF regions are shared system registers already owned by
+	 * their respective subsystem drivers (tcsr syscon, tlmm pinctrl).
+	 * Use ioremap without requesting the resource to avoid EBUSY.
+	 * Both SerDes instances share the same physical regions.
+	 */
+	data->tcsr_qref = devm_ioremap(dev, TCSR_QREF_PHYS, TCSR_QREF_SIZE);
+	if (!data->tcsr_qref)
+		dev_warn(dev, "failed to ioremap TCSR QREF, QREF enable skipped\n");
+
+	data->tlmm_qref = devm_ioremap(dev, TLMM_QREF_PHYS, TLMM_QREF_SIZE);
+	if (!data->tlmm_qref)
+		dev_warn(dev, "failed to ioremap TLMM QREF, QREF enable skipped\n");
 
 	phy = devm_phy_create(dev, NULL, &qcom_dwmac_usxgmii_ops);
 	if (IS_ERR(phy))
