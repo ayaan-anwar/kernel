@@ -47,7 +47,7 @@
 #define QPHY_PCS_SGMII_MISC_CTRL7		0x114
 
 /* TX_EMP_POST1_LVL offset (not yet in upstream v7 header) */
-#define QSERDES_V7_TX_TX_EMP_POST1_LVL		0x018
+#define QSERDES_V7_TX_TX_EMP_POST1_LVL		0x00c
 
 /* Peak load currents from Nord SerDes power requirements */
 #define USXGMII_VDDA_0P9_UA	40210
