@@ -57,9 +57,26 @@ static const char * const qcom_dwmac_usxgmii_clk_names[] = {
 	"sgmi_rx", "sgmi_tx", "sgmi_ref",
 };
 
+/* Clock names for the 4 SGMII PHY mux sources and their PHY output parents */
+static const char * const qcom_dwmac_usxgmii_mux_names[] = {
+	"cc_sgmiiphy_rx_clk_src",
+	"cc_sgmiiphy_tx_clk_src",
+	"sgmiiphy_mac_rclk_src",
+	"sgmiiphy_mac_tclk_src",
+};
+
+static const char * const qcom_dwmac_usxgmii_phy_clk_names[] = {
+	"sgmiiphy_rclk",
+	"sgmiiphy_tclk",
+	"sgmiiphy_mac_rclk",
+	"sgmiiphy_mac_tclk",
+};
+
 struct qcom_dwmac_usxgmii_phy_data {
 	struct regmap *regmap;
 	struct clk_bulk_data clks[ARRAY_SIZE(qcom_dwmac_usxgmii_clk_names)];
+	struct clk *mux_clks[ARRAY_SIZE(qcom_dwmac_usxgmii_mux_names)];
+	struct clk *phy_clks[ARRAY_SIZE(qcom_dwmac_usxgmii_phy_clk_names)];
 	struct regulator *vdda_0p9;
 	struct regulator *vdda_1p2;
 	struct gpio_desc *reset_gpio;
@@ -195,6 +212,7 @@ static int qcom_dwmac_usxgmii_calibrate(struct phy *phy)
 	struct qcom_dwmac_usxgmii_phy_data *data = phy_get_drvdata(phy);
 	struct device *dev = phy->dev.parent;
 	struct regmap *rm = data->regmap;
+	int i, ret;
 
 	qcom_dwmac_usxgmii_phy_init_10g(rm);
 
@@ -224,6 +242,16 @@ static int qcom_dwmac_usxgmii_calibrate(struct phy *phy)
 					    BIT(1))) {
 		dev_err(dev, "SerDes PLL lock timed out\n");
 		return -ETIMEDOUT;
+	}
+
+	/* PLL locked: switch all 4 SGMII PHY mux clocks to active (PHY output) source */
+	for (i = 0; i < ARRAY_SIZE(qcom_dwmac_usxgmii_mux_names); i++) {
+		ret = clk_set_parent(data->mux_clks[i], data->phy_clks[i]);
+		if (ret) {
+			dev_err(dev, "clk_set_parent %s failed: %d\n",
+				qcom_dwmac_usxgmii_mux_names[i], ret);
+			return ret;
+		}
 	}
 
 	dev_info(dev, "SerDes calibration OK: C_READY PCS_READY SGMIIPHY_READY PLL_LOCKED\n");
@@ -343,6 +371,18 @@ static int qcom_dwmac_usxgmii_probe(struct platform_device *pdev)
 	ret = devm_clk_bulk_get(dev, ARRAY_SIZE(data->clks), data->clks);
 	if (ret)
 		return ret;
+
+	for (int i = 0; i < ARRAY_SIZE(data->mux_clks); i++) {
+		data->mux_clks[i] = devm_clk_get(dev, qcom_dwmac_usxgmii_mux_names[i]);
+		if (IS_ERR(data->mux_clks[i]))
+			return PTR_ERR(data->mux_clks[i]);
+	}
+
+	for (int i = 0; i < ARRAY_SIZE(data->phy_clks); i++) {
+		data->phy_clks[i] = devm_clk_get(dev, qcom_dwmac_usxgmii_phy_clk_names[i]);
+		if (IS_ERR(data->phy_clks[i]))
+			return PTR_ERR(data->phy_clks[i]);
+	}
 
 	data->vdda_0p9 = devm_regulator_get(dev, "vdda-0p9");
 	if (IS_ERR(data->vdda_0p9))

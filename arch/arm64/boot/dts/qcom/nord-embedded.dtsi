@@ -982,11 +982,68 @@
 		#power-domain-cells = <1>;
 	};
 
+	/* EMAC0 SerDes PHY output clocks - rate is 312.5 MHz at 10G link speed */
+	emac0_sgmiiphy_rclk: emac0-sgmiiphy-rclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <312500000>;
+	};
+
+	emac0_sgmiiphy_tclk: emac0-sgmiiphy-tclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <312500000>;
+	};
+
+	emac0_sgmiiphy_mac_rclk: emac0-sgmiiphy-mac-rclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <312500000>;
+	};
+
+	emac0_sgmiiphy_mac_tclk: emac0-sgmiiphy-mac-tclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <312500000>;
+	};
+
+	emac1_sgmiiphy_rclk: emac1-sgmiiphy-rclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <312500000>;
+	};
+
+	emac1_sgmiiphy_tclk: emac1-sgmiiphy-tclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <312500000>;
+	};
+
+	emac1_sgmiiphy_mac_rclk: emac1-sgmiiphy-mac-rclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <312500000>;
+	};
+
+	emac1_sgmiiphy_mac_tclk: emac1-sgmiiphy-mac-tclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <312500000>;
+	};
+
 	segcc: clock-controller@8a00000 {
 		compatible = "qcom,nord-segcc";
 		reg = <0x0 0x08a00000 0x0 0xf4200>;
 		clocks = <&bi_tcxo_div2>,
-			 <&sleep_clk>;
+			 <&sleep_clk>,
+			 <&emac0_sgmiiphy_mac_rclk>,
+			 <&emac0_sgmiiphy_mac_tclk>,
+			 <&emac0_sgmiiphy_rclk>,
+			 <&emac0_sgmiiphy_tclk>,
+			 <&emac1_sgmiiphy_mac_rclk>,
+			 <&emac1_sgmiiphy_mac_tclk>,
+			 <&emac1_sgmiiphy_rclk>,
+			 <&emac1_sgmiiphy_tclk>;
 		#clock-cells = <1>;
 		#reset-cells = <1>;
 		#power-domain-cells = <1>;
@@ -997,8 +1054,20 @@
 		reg = <0x0 0x088f8000 0x0 0x4000>;
 		clocks = <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_RX_CLK>,
 			 <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_TX_CLK>,
-			 <&tcsrcc TCSR_UX_SGMII_0_CLKREF_EN>;
-		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref";
+			 <&tcsrcc TCSR_UX_SGMII_0_CLKREF_EN>,
+			 <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_RX_CLK_SRC>,
+			 <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_TX_CLK_SRC>,
+			 <&segcc SE_GCC_EMAC0_SGMIIPHY_MAC_RCLK_SRC>,
+			 <&segcc SE_GCC_EMAC0_SGMIIPHY_MAC_TCLK_SRC>,
+			 <&emac0_sgmiiphy_rclk>,
+			 <&emac0_sgmiiphy_tclk>,
+			 <&emac0_sgmiiphy_mac_rclk>,
+			 <&emac0_sgmiiphy_mac_tclk>;
+		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref",
+			      "cc_sgmiiphy_rx_clk_src", "cc_sgmiiphy_tx_clk_src",
+			      "sgmiiphy_mac_rclk_src", "sgmiiphy_mac_tclk_src",
+			      "sgmiiphy_rclk", "sgmiiphy_tclk",
+			      "sgmiiphy_mac_rclk", "sgmiiphy_mac_tclk";
 		#phy-cells = <0>;
 	};
 
@@ -1007,8 +1076,20 @@
 		reg = <0x0 0x088fc000 0x0 0x4000>;
 		clocks = <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_RX_CLK>,
 			 <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_TX_CLK>,
-			 <&tcsrcc TCSR_UX_SGMII_1_CLKREF_EN>;
-		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref";
+			 <&tcsrcc TCSR_UX_SGMII_1_CLKREF_EN>,
+			 <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_RX_CLK_SRC>,
+			 <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_TX_CLK_SRC>,
+			 <&segcc SE_GCC_EMAC1_SGMIIPHY_MAC_RCLK_SRC>,
+			 <&segcc SE_GCC_EMAC1_SGMIIPHY_MAC_TCLK_SRC>,
+			 <&emac1_sgmiiphy_rclk>,
+			 <&emac1_sgmiiphy_tclk>,
+			 <&emac1_sgmiiphy_mac_rclk>,
+			 <&emac1_sgmiiphy_mac_tclk>;
+		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref",
+			      "cc_sgmiiphy_rx_clk_src", "cc_sgmiiphy_tx_clk_src",
+			      "sgmiiphy_mac_rclk_src", "sgmiiphy_mac_tclk_src",
+			      "sgmiiphy_rclk", "sgmiiphy_tclk",
+			      "sgmiiphy_mac_rclk", "sgmiiphy_mac_tclk";
 		#phy-cells = <0>;
 	};
 
