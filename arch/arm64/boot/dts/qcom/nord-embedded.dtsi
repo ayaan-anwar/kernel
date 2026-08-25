@@ -1051,45 +1051,27 @@
 
 	serdes0: phy@88f8000 {
 		compatible = "qcom,nord-dwmac-usxgmii-phy";
-		reg = <0x0 0x088f8000 0x0 0x4000>;
+		reg = <0x0 0x088f8000 0x0 0x4000>,	/* SerDes PHY */
+		      <0x0 0x01fd5000 0x0 0x1000>,	/* TCSR QREF */
+		      <0x0 0x0f1d8000 0x0 0x12000>;	/* TLMM QREF */
+		qcom,phy-index = <0>;
 		clocks = <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_RX_CLK>,
 			 <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_TX_CLK>,
-			 <&tcsrcc TCSR_UX_SGMII_0_CLKREF_EN>,
-			 <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_RX_CLK_SRC>,
-			 <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_TX_CLK_SRC>,
-			 <&segcc SE_GCC_EMAC0_SGMIIPHY_MAC_RCLK_SRC>,
-			 <&segcc SE_GCC_EMAC0_SGMIIPHY_MAC_TCLK_SRC>,
-			 <&emac0_sgmiiphy_rclk>,
-			 <&emac0_sgmiiphy_tclk>,
-			 <&emac0_sgmiiphy_mac_rclk>,
-			 <&emac0_sgmiiphy_mac_tclk>;
-		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref",
-			      "cc_sgmiiphy_rx_clk_src", "cc_sgmiiphy_tx_clk_src",
-			      "sgmiiphy_mac_rclk_src", "sgmiiphy_mac_tclk_src",
-			      "sgmiiphy_rclk", "sgmiiphy_tclk",
-			      "sgmiiphy_mac_rclk", "sgmiiphy_mac_tclk";
+			 <&tcsrcc TCSR_UX_SGMII_0_CLKREF_EN>;
+		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref";
 		#phy-cells = <0>;
 	};
 
 	serdes1: phy@88fc000 {
 		compatible = "qcom,nord-dwmac-usxgmii-phy";
-		reg = <0x0 0x088fc000 0x0 0x4000>;
+		reg = <0x0 0x088fc000 0x0 0x4000>,	/* SerDes PHY */
+		      <0x0 0x01fd5000 0x0 0x1000>,	/* TCSR QREF (shared) */
+		      <0x0 0x0f1d8000 0x0 0x12000>;	/* TLMM QREF */
+		qcom,phy-index = <1>;
 		clocks = <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_RX_CLK>,
 			 <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_TX_CLK>,
-			 <&tcsrcc TCSR_UX_SGMII_1_CLKREF_EN>,
-			 <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_RX_CLK_SRC>,
-			 <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_TX_CLK_SRC>,
-			 <&segcc SE_GCC_EMAC1_SGMIIPHY_MAC_RCLK_SRC>,
-			 <&segcc SE_GCC_EMAC1_SGMIIPHY_MAC_TCLK_SRC>,
-			 <&emac1_sgmiiphy_rclk>,
-			 <&emac1_sgmiiphy_tclk>,
-			 <&emac1_sgmiiphy_mac_rclk>,
-			 <&emac1_sgmiiphy_mac_tclk>;
-		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref",
-			      "cc_sgmiiphy_rx_clk_src", "cc_sgmiiphy_tx_clk_src",
-			      "sgmiiphy_mac_rclk_src", "sgmiiphy_mac_tclk_src",
-			      "sgmiiphy_rclk", "sgmiiphy_tclk",
-			      "sgmiiphy_mac_rclk", "sgmiiphy_mac_tclk";
+			 <&tcsrcc TCSR_UX_SGMII_1_CLKREF_EN>;
+		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref";
 		#phy-cells = <0>;
 	};
 

@@ -12,14 +12,15 @@
  * Block layout (offsets from phy base):
  *   COM: 0x000  TX0: 0x400  RX0: 0x600  PCS: 0xC00
  *
- * Register values from NordAU SGMII PHY HPG v1.03.
+ * Register values from the GearVM Nord V2 10G sequence.
  *
  * Copyright (c) 2024 Qualcomm Technologies, Inc.
  */
 
 #include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/ethtool.h>
-#include <linux/gpio/consumer.h>
+#include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/phy/phy.h>
@@ -43,7 +44,6 @@
 #define QPHY_PCS_RETIME_BUFFER_EN		0x018
 #define QPHY_PCS_TX_LARGE_AMP_POST_EMP_LVL	0x024
 #define QPHY_PCS_TX_SMALL_AMP_POST_EMP_LVL	0x02C
-#define QPHY_PCS_RX_SIGDET_CTRL2		0x08C
 #define QPHY_PCS_SGMII_MISC_CTRL7		0x114
 
 /* TX_EMP_POST1_LVL offset (not yet in upstream v7 header) */
@@ -53,33 +53,47 @@
 #define USXGMII_VDDA_0P9_UA	40210
 #define USXGMII_VDDA_1P2_UA	12520
 
+/*
+ * QREF CXO clock reference network — must be programmed before SerDes
+ * calibration.  Source: GearVM tcsr_tlmm_phy.h / emac_phy_tcsr_tlmm_enable().
+ *
+ * TCSR QREF block base: 0x01FD5000 (absolute)
+ * TLMM QREF block base: 0x0F1D8000 (absolute)
+ */
+#define TCSR_QREF_SIZE			0x1000
+#define TCSR_QREFS_CXO_0_RPT0		0x00
+#define TCSR_QREFS_CXO_0_TX0		0x04
+#define TCSR_QREFS_CXO_0_RX3		0x08
+#define TCSR_QREFS_CXO_0_RX2		0x0C
+#define TCSR_QREFS_CXO_0_RPT2		0x10
+#define TCSR_QREFS_CXO_0_RX4		0x14
+#define TCSR_QREFS_CXO_0_RX0		0x18
+#define TCSR_QREFS_CXO_0_RPT1		0x1C
+#define TCSR_QREFS_CXO_0_RPT4		0x20
+#define TCSR_QREFS_CXO_0_RPT3		0x2C
+#define TCSR_CXO_REFGEN_BIAS_SEL	0x40
+#define TCSR_QREFS_CXO_0_RX5		0x78
+#define TCSR_QREFS_CXO_0_TX1		0x7C
+
+#define TLMM_QREF_SIZE			0x12000
+#define TLMM_QREF_PHY_SEL_0		0x0000
+/* Per-PHY block: offset = 0x1000 * (phy_index + 1) */
+#define TLMM_PHY_QREF_ELEM_TX_RPT_SEL(n)	(0x1000 * ((n) + 1) + 0x000)
+#define TLMM_PHY_QREF_ELEM_RX_SEL(n)		(0x1000 * ((n) + 1) + 0x004)
+#define TLMM_PHY_QREF_ENABLE(n)			(0x1000 * ((n) + 1) + 0x008)
+
 static const char * const qcom_dwmac_usxgmii_clk_names[] = {
 	"sgmi_rx", "sgmi_tx", "sgmi_ref",
 };
 
-/* Clock names for the 4 SGMII PHY mux sources and their PHY output parents */
-static const char * const qcom_dwmac_usxgmii_mux_names[] = {
-	"cc_sgmiiphy_rx_clk_src",
-	"cc_sgmiiphy_tx_clk_src",
-	"sgmiiphy_mac_rclk_src",
-	"sgmiiphy_mac_tclk_src",
-};
-
-static const char * const qcom_dwmac_usxgmii_phy_clk_names[] = {
-	"sgmiiphy_rclk",
-	"sgmiiphy_tclk",
-	"sgmiiphy_mac_rclk",
-	"sgmiiphy_mac_tclk",
-};
-
 struct qcom_dwmac_usxgmii_phy_data {
 	struct regmap *regmap;
+	void __iomem *tcsr_qref;	/* TCSR QREF block (0x1FD5000) */
+	void __iomem *tlmm_qref;	/* TLMM QREF block (0xF1D8000) */
+	int phy_index;			/* 0 = EMAC0, 1 = EMAC1 */
 	struct clk_bulk_data clks[ARRAY_SIZE(qcom_dwmac_usxgmii_clk_names)];
-	struct clk *mux_clks[ARRAY_SIZE(qcom_dwmac_usxgmii_mux_names)];
-	struct clk *phy_clks[ARRAY_SIZE(qcom_dwmac_usxgmii_phy_clk_names)];
 	struct regulator *vdda_0p9;
 	struct regulator *vdda_1p2;
-	struct gpio_desc *reset_gpio;
 };
 
 #define com_w(rm, off, v)  regmap_write((rm), QSERDES_COM_BASE + (off), (v))
@@ -97,7 +111,7 @@ static void qcom_dwmac_usxgmii_phy_init_10g(struct regmap *rm)
 	com_w(rm, QSERDES_V7_COM_PLL_IVCO,                     0x0F);
 	com_w(rm, QSERDES_V7_COM_BIAS_EN_CLKBUFLR_EN,          0x07);
 	com_w(rm, QSERDES_V7_COM_CLK_ENABLE1,                  0x0F);
-	com_w(rm, QSERDES_V7_COM_CP_CTRL_MODE0,                0x06);
+	com_w(rm, QSERDES_V7_COM_CP_CTRL_MODE0,                0x08);
 	com_w(rm, QSERDES_V7_COM_PLL_RCTRL_MODE0,              0x16);
 	com_w(rm, QSERDES_V7_COM_PLL_CCTRL_MODE0,              0x36);
 	com_w(rm, QSERDES_V7_COM_INTEGLOOP_GAIN0_MODE0,        0x1F);
@@ -146,8 +160,8 @@ static void qcom_dwmac_usxgmii_phy_init_10g(struct regmap *rm)
 	rx_w(rm, QSERDES_V7_RX_UCDR_FASTLOCK_COUNT_HIGH,       0x01);
 	rx_w(rm, QSERDES_V7_RX_UCDR_PI_CONTROLS,               0x81);
 	rx_w(rm, QSERDES_V7_RX_UCDR_PI_CTRL2,                  0x81);
-	rx_w(rm, QSERDES_V7_RX_UCDR_SB2_THRESH1,               0x00);
-	rx_w(rm, QSERDES_V7_RX_UCDR_SB2_THRESH2,               0x00);
+	rx_w(rm, QSERDES_V7_RX_UCDR_SB2_THRESH1,               0x11);	/* V2 */
+	rx_w(rm, QSERDES_V7_RX_UCDR_SB2_THRESH2,               0x22);	/* V2 */
 	rx_w(rm, QSERDES_V7_RX_RX_TERM_BW,                     0x03);
 	rx_w(rm, QSERDES_V7_RX_VGA_CAL_CNTRL2,                 0x08);
 	rx_w(rm, QSERDES_V7_RX_GM_CAL,                         0x0F);
@@ -167,35 +181,36 @@ static void qcom_dwmac_usxgmii_phy_init_10g(struct regmap *rm)
 	rx_w(rm, QSERDES_V7_RX_RX_MODE_00_HIGH,                0xBF);
 	rx_w(rm, QSERDES_V7_RX_RX_MODE_00_HIGH2,               0xFF);
 	rx_w(rm, QSERDES_V7_RX_RX_MODE_00_HIGH3,               0xDF);
-	rx_w(rm, QSERDES_V7_RX_RX_MODE_00_HIGH4,               0xED);
-	rx_w(rm, QSERDES_V7_RX_RX_MODE_01_LOW,                 0x24);
-	rx_w(rm, QSERDES_V7_RX_RX_MODE_01_HIGH,                0x24);
-	rx_w(rm, QSERDES_V7_RX_RX_MODE_01_HIGH2,               0x24);
-	rx_w(rm, QSERDES_V7_RX_RX_MODE_01_HIGH3,               0x00);
-	rx_w(rm, QSERDES_V7_RX_RX_MODE_01_HIGH4,               0xAC);
-	rx_w(rm, QSERDES_V7_RX_RX_MODE_10_LOW,                 0x24);
-	rx_w(rm, QSERDES_V7_RX_RX_MODE_10_HIGH,                0x24);
-	rx_w(rm, QSERDES_V7_RX_RX_MODE_10_HIGH2,               0x24);
-	rx_w(rm, QSERDES_V7_RX_RX_MODE_10_HIGH3,               0x00);
-	rx_w(rm, QSERDES_V7_RX_RX_MODE_10_HIGH4,               0x0C);
+	rx_w(rm, QSERDES_V7_RX_RX_MODE_00_HIGH4,               0xEF);
+	rx_w(rm, QSERDES_V7_RX_RX_MODE_01_LOW,                 0xE5);
+	rx_w(rm, QSERDES_V7_RX_RX_MODE_01_HIGH,                0xC8);
+	rx_w(rm, QSERDES_V7_RX_RX_MODE_01_HIGH2,               0xC8);
+	rx_w(rm, QSERDES_V7_RX_RX_MODE_01_HIGH3,               0x14);
+	rx_w(rm, QSERDES_V7_RX_RX_MODE_01_HIGH4,               0xB6);
+	rx_w(rm, QSERDES_V7_RX_RX_MODE_10_LOW,                 0xE0);
+	rx_w(rm, QSERDES_V7_RX_RX_MODE_10_HIGH,                0xC8);
+	rx_w(rm, QSERDES_V7_RX_RX_MODE_10_HIGH2,               0xC8);
+	rx_w(rm, QSERDES_V7_RX_RX_MODE_10_HIGH3,               0x3B);
+	rx_w(rm, QSERDES_V7_RX_RX_MODE_10_HIGH4,               0xB7);
 	rx_w(rm, QSERDES_V7_RX_DCC_CTRL1,                      0x0C);
 	rx_w(rm, QSERDES_V7_RX_SIGDET_CAL_CTRL1,               0x00);
 	rx_w(rm, QSERDES_V7_RX_SIGDET_CAL_CTRL2_AND_CDR_LOCK_EDGE, 0x00);
 
 	/* PCS */
-	pcs_w(rm, QPHY_PCS_LINE_RESET_TIME,             0x1F);
+	pcs_w(rm, QPHY_PCS_LINE_RESET_TIME,             0x00);
 	pcs_w(rm, QPHY_PCS_RETIME_BUFFER_EN,            0x01);
 	pcs_w(rm, QPHY_PCS_TX_LARGE_AMP_DRV_LVL,       0x1A);
 	pcs_w(rm, QPHY_PCS_TX_LARGE_AMP_POST_EMP_LVL,  0x0B);
 	pcs_w(rm, QPHY_PCS_TX_SMALL_AMP_DRV_LVL,       0x03);
 	pcs_w(rm, QPHY_PCS_TX_SMALL_AMP_POST_EMP_LVL,  0x00);
-	pcs_w(rm, QPHY_PCS_RX_SIGDET_CTRL2,            0xCC);
 	pcs_w(rm, QPHY_PCS_SGMII_MISC_CTRL7,           0x00);
 	pcs_w(rm, QPHY_PCS_SGMII_MISC_CTRL8,           0x14);
 	pcs_w(rm, QPHY_PCS_TX_MID_TERM_CTRL1,          0x83);
 	pcs_w(rm, QPHY_PCS_TX_MID_TERM_CTRL2,          0x08);
 	pcs_w(rm, QPHY_PCS_SW_RESET,                   0x00);
 	pcs_w(rm, QPHY_PCS_PHY_START,                  0x01);
+	udelay(5);
+	pcs_w(rm, QPHY_PCS_PHY_START,                  0x01);	/* SVE: write twice */
 }
 
 static int
@@ -207,12 +222,52 @@ qcom_dwmac_usxgmii_poll_status(struct regmap *rm, unsigned int reg,
 	return regmap_read_poll_timeout(rm, reg, val, val & bit, 1500, 750000);
 }
 
+/*
+ * qcom_dwmac_usxgmii_enable_qref - enable CXO QREF network for SerDes.
+ *
+ * Must run before SerDes calibration.  Mirrors GearVM emac_phy_tcsr_tlmm_enable().
+ * Sequence: TCSR bias → TLMM PHY elem → sleep → TCSR CXO config → sleep →
+ *           TLMM PHY_SEL → sleep.
+ */
+static void qcom_dwmac_usxgmii_enable_qref(struct qcom_dwmac_usxgmii_phy_data *data)
+{
+	void __iomem *tc = data->tcsr_qref;
+	void __iomem *tl = data->tlmm_qref;
+	int n = data->phy_index;
+
+	/* Step 1: bias and enable PHY QREF element */
+	writel(0x01,   tc + TCSR_CXO_REFGEN_BIAS_SEL);
+	writel(0xFFFF, tl + TLMM_PHY_QREF_ELEM_TX_RPT_SEL(n));
+	writel(0xFF,   tl + TLMM_PHY_QREF_ELEM_RX_SEL(n));
+	writel(0x01,   tl + TLMM_PHY_QREF_ENABLE(n));
+	msleep(10);
+
+	/* Step 2: configure TCSR CXO_0 routing */
+	writel(0x3807, tc + TCSR_QREFS_CXO_0_TX0);
+	writel(0x2807, tc + TCSR_QREFS_CXO_0_TX1);
+	writel(0x43,   tc + TCSR_QREFS_CXO_0_RX0);
+	writel(0x01,   tc + TCSR_QREFS_CXO_0_RX1);
+	writel(0x01,   tc + TCSR_QREFS_CXO_0_RX2);
+	writel(0x01,   tc + TCSR_QREFS_CXO_0_RX3);
+	writel(0x01,   tc + TCSR_QREFS_CXO_0_RX4);
+	writel(0x01,   tc + TCSR_QREFS_CXO_0_RX5);
+	writel(0x03,   tc + TCSR_QREFS_CXO_0_RPT0);
+	writel(0x03,   tc + TCSR_QREFS_CXO_0_RPT1);
+	writel(0x03,   tc + TCSR_QREFS_CXO_0_RPT2);
+	writel(0x03,   tc + TCSR_QREFS_CXO_0_RPT3);
+	writel(0x03,   tc + TCSR_QREFS_CXO_0_RPT4);
+	msleep(10);
+
+	/* Step 3: connect PHY to CXO_0 via TLMM mux */
+	writel(0x06, tl + TLMM_QREF_PHY_SEL_0);
+	msleep(10);
+}
+
 static int qcom_dwmac_usxgmii_calibrate(struct phy *phy)
 {
 	struct qcom_dwmac_usxgmii_phy_data *data = phy_get_drvdata(phy);
 	struct device *dev = phy->dev.parent;
 	struct regmap *rm = data->regmap;
-	int i, ret;
 
 	qcom_dwmac_usxgmii_phy_init_10g(rm);
 
@@ -244,16 +299,6 @@ static int qcom_dwmac_usxgmii_calibrate(struct phy *phy)
 		return -ETIMEDOUT;
 	}
 
-	/* PLL locked: switch all 4 SGMII PHY mux clocks to active (PHY output) source */
-	for (i = 0; i < ARRAY_SIZE(qcom_dwmac_usxgmii_mux_names); i++) {
-		ret = clk_set_parent(data->mux_clks[i], data->phy_clks[i]);
-		if (ret) {
-			dev_err(dev, "clk_set_parent %s failed: %d\n",
-				qcom_dwmac_usxgmii_mux_names[i], ret);
-			return ret;
-		}
-	}
-
 	dev_info(dev, "SerDes calibration OK: C_READY PCS_READY SGMIIPHY_READY PLL_LOCKED\n");
 	return 0;
 }
@@ -281,12 +326,11 @@ static int qcom_dwmac_usxgmii_power_on(struct phy *phy)
 	if (ret)
 		goto err_clk;
 
-	/* Deassert SerDes reset after supplies and clocks are stable. */
-	if (data->reset_gpio)
-		dev_info(&phy->dev, "deasserting SerDes reset GPIO\n");
-	gpiod_set_value_cansleep(data->reset_gpio, 0);
-	usleep_range(2000, 4000);
+	/* Enable CXO QREF network before SerDes reset is deasserted. */
+	if (data->tcsr_qref && data->tlmm_qref)
+		qcom_dwmac_usxgmii_enable_qref(data);
 
+	usleep_range(2000, 4000);
 	return 0;
 
 err_clk:
@@ -306,8 +350,6 @@ static int qcom_dwmac_usxgmii_power_off(struct phy *phy)
 
 	pcs_w(rm, QPHY_PCS_TX_MID_TERM_CTRL2, 0x08);
 	pcs_w(rm, QPHY_PCS_SW_RESET,          0x01);
-
-	gpiod_set_value_cansleep(data->reset_gpio, 1);
 
 	clk_bulk_disable_unprepare(ARRAY_SIZE(data->clks), data->clks);
 
@@ -362,6 +404,22 @@ static int qcom_dwmac_usxgmii_probe(struct platform_device *pdev)
 	if (IS_ERR(data->regmap))
 		return PTR_ERR(data->regmap);
 
+	/* TCSR QREF block (resource 1) — optional, fall back to no-QREF */
+	data->tcsr_qref = devm_platform_ioremap_resource(pdev, 1);
+	if (IS_ERR(data->tcsr_qref)) {
+		dev_warn(dev, "no TCSR QREF resource, skipping QREF enable\n");
+		data->tcsr_qref = NULL;
+	}
+
+	/* TLMM QREF block (resource 2) */
+	data->tlmm_qref = devm_platform_ioremap_resource(pdev, 2);
+	if (IS_ERR(data->tlmm_qref))
+		data->tlmm_qref = NULL;
+
+	/* PHY index selects the per-PHY TLMM element (0=EMAC0, 1=EMAC1) */
+	if (of_property_read_u32(dev->of_node, "qcom,phy-index", &data->phy_index))
+		data->phy_index = 0;
+
 	phy = devm_phy_create(dev, NULL, &qcom_dwmac_usxgmii_ops);
 	if (IS_ERR(phy))
 		return PTR_ERR(phy);
@@ -372,18 +430,6 @@ static int qcom_dwmac_usxgmii_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	for (int i = 0; i < ARRAY_SIZE(data->mux_clks); i++) {
-		data->mux_clks[i] = devm_clk_get(dev, qcom_dwmac_usxgmii_mux_names[i]);
-		if (IS_ERR(data->mux_clks[i]))
-			return PTR_ERR(data->mux_clks[i]);
-	}
-
-	for (int i = 0; i < ARRAY_SIZE(data->phy_clks); i++) {
-		data->phy_clks[i] = devm_clk_get(dev, qcom_dwmac_usxgmii_phy_clk_names[i]);
-		if (IS_ERR(data->phy_clks[i]))
-			return PTR_ERR(data->phy_clks[i]);
-	}
-
 	data->vdda_0p9 = devm_regulator_get(dev, "vdda-0p9");
 	if (IS_ERR(data->vdda_0p9))
 		return PTR_ERR(data->vdda_0p9);
@@ -391,10 +437,6 @@ static int qcom_dwmac_usxgmii_probe(struct platform_device *pdev)
 	data->vdda_1p2 = devm_regulator_get(dev, "vdda-1p2");
 	if (IS_ERR(data->vdda_1p2))
 		return PTR_ERR(data->vdda_1p2);
-
-	data->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
-	if (IS_ERR(data->reset_gpio))
-		return PTR_ERR(data->reset_gpio);
 
 	provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
 	if (IS_ERR(provider))

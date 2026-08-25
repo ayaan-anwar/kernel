@@ -711,13 +711,11 @@
 &serdes0 {
 	vdda-0p9-supply = <&vreg_l1h_0p9>;
 	vdda-1p2-supply = <&vreg_l2h_1p2>;
-	reset-gpios = <&pmic_e_gpios 5 GPIO_ACTIVE_LOW>;
 };
 
 &serdes1 {
 	vdda-0p9-supply = <&vreg_l1h_0p9>;
 	vdda-1p2-supply = <&vreg_l2h_1p2>;
-	reset-gpios = <&pmic_f_gpios 7 GPIO_ACTIVE_LOW>;
 };
 
 &ethernet0 {

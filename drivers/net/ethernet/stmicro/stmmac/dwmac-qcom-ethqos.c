@@ -289,6 +289,29 @@ static void ethqos_set_func_clk_en(struct qcom_ethqos *ethqos)
 	rgmii_setmask(ethqos, RGMII_CONFIG_FUNC_CLK_EN, RGMII_IO_MACRO_CONFIG);
 }
 
+/*
+ * ethqos_configure_10gbaser_iomacro - minimal IO macro setup for 10GBASE-R.
+ *
+ * SVE feedback: for 10GBASE-R only 4 bits need programming.  No POR reset
+ * required.  Replaces the full ethqos_configure_usxgmii() for this speed.
+ */
+static void ethqos_configure_10gbaser_iomacro(struct qcom_ethqos *ethqos)
+{
+	/* Bypass RGMII IO macro (EMAC_WRAPPER_BYPASS_RGMII_IO_MACRO[0] = 1) */
+	rgmii_setmask(ethqos, RGMII_BYPASS_EN, RGMII_IO_MACRO_BYPASS);
+
+	/* Route USXGMII clock block through GMII clock block (MUX_SEL[1] = 1) */
+	rgmii_setmask(ethqos, USXGMII_CLK_BLK_GMII_CLK_BLK_SEL,
+		      EMAC_WRAPPER_USXGMII_MUX_SEL);
+
+	/* USXGMII master clock mux select (PHY_CNTRL1[4] = 1) */
+	rgmii_setmask(ethqos, SGMII_PHY_CNTRL1_USXGMII_GMII_MASTER_CLK_MUX_SEL,
+		      EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4);
+
+	/* Functional clock enable (CONFIG[30] = 1) */
+	ethqos_set_func_clk_en(ethqos);
+}
+
 static const struct ethqos_emac_por emac_v2_3_0_por[] = {
 	{ .offset = RGMII_IO_MACRO_CONFIG,	.value = 0x00C01343 },
 	{ .offset = SDCC_HC_REG_DLL_CONFIG,	.value = 0x2004642C },
@@ -785,7 +808,10 @@ static void ethqos_fix_mac_speed_usxgmii(void *bsp_priv,
 	struct qcom_ethqos *ethqos = bsp_priv;
 
 	ethqos->speed = speed;
-	ethqos_configure_usxgmii(ethqos);
+	if (ethqos->has_io_macro_ge_4 && speed == SPEED_10000)
+		ethqos_configure_10gbaser_iomacro(ethqos);
+	else
+		ethqos_configure_usxgmii(ethqos);
 
 	/*
 	 * phylink does not call pcs_link_up() for fixed-link interfaces.
