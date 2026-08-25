@@ -4,6 +4,7 @@
  */
 
 #include <linux/clk-provider.h>
+#include <linux/io.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -317,8 +318,50 @@ static const struct of_device_id tcsr_cc_nord_match_table[] = {
 };
 MODULE_DEVICE_TABLE(of, tcsr_cc_nord_match_table);
 
+/*
+ * TCSR QREF CXO block — programs the CXO reference network that distributes
+ * the 19.2 MHz crystal to the SGMII SerDes and XPCS.  Must be done before
+ * the first consumer enables TCSR_UX_SGMII_x_CLKREF_EN, otherwise clocks
+ * to the XPCS are unavailable and cause a signalling failure.
+ *
+ * Source: GearVM tcsr_tlmm_phy.h.  TCSR_QREF_PHYS = 0x01FD5000.
+ * The region is within the TCSR syscon but programmed here because
+ * the clock driver is the logical owner of the reference distribution.
+ */
+#define TCSR_QREF_PHYS			0x01FD5000UL
+#define TCSR_QREF_SIZE			0x100
+
+static void tcsr_cc_nord_qref_init(struct device *dev)
+{
+	void __iomem *base;
+
+	/* No resource claim — region is within the TCSR syscon block. */
+	base = devm_ioremap(dev, TCSR_QREF_PHYS, TCSR_QREF_SIZE);
+	if (!base) {
+		dev_warn(dev, "failed to map TCSR QREF, XPCS clocks may be absent\n");
+		return;
+	}
+
+	/* CXO_0 routing: TX0=0x3807, TX1=0x2807 (GearVM TCSR_QREFS_CXO_0_*) */
+	writel(0x03,   base + 0x00);	/* RPT0 */
+	writel(0x3807, base + 0x04);	/* TX0  */
+	writel(0x01,   base + 0x08);	/* RX3  */
+	writel(0x01,   base + 0x0C);	/* RX2  */
+	writel(0x03,   base + 0x10);	/* RPT2 */
+	writel(0x01,   base + 0x14);	/* RX4  */
+	writel(0x43,   base + 0x18);	/* RX0  */
+	writel(0x03,   base + 0x1C);	/* RPT1 */
+	writel(0x03,   base + 0x20);	/* RPT4 */
+	writel(0x03,   base + 0x2C);	/* RPT3 */
+	writel(0x01,   base + 0x38);	/* RX1  */
+	writel(0x01,   base + 0x40);	/* REFGEN_BIAS_SEL */
+	writel(0x01,   base + 0x78);	/* RX5  */
+	writel(0x2807, base + 0x7C);	/* TX1  */
+}
+
 static int tcsr_cc_nord_probe(struct platform_device *pdev)
 {
+	tcsr_cc_nord_qref_init(&pdev->dev);
 	return qcom_cc_probe(pdev, &tcsr_cc_nord_desc);
 }
 

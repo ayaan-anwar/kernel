@@ -14,13 +14,15 @@
  *
  * Register values from the GearVM Nord V2 10G sequence.
  *
+ * QREF CXO programming is handled by the tcsrcc and pinctrl drivers
+ * which own those address spaces and probe before this driver.
+ *
  * Copyright (c) 2024 Qualcomm Technologies, Inc.
  */
 
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/ethtool.h>
-#include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/phy/phy.h>
@@ -53,51 +55,12 @@
 #define USXGMII_VDDA_0P9_UA	40210
 #define USXGMII_VDDA_1P2_UA	12520
 
-/*
- * QREF CXO clock reference network — must be programmed before SerDes
- * calibration.  Source: GearVM tcsr_tlmm_phy.h / emac_phy_tcsr_tlmm_enable().
- *
- * TCSR QREF block base: 0x01FD5000 (absolute, within TCSR syscon)
- * TLMM QREF block base: 0x0F1D8000 (absolute, within TLMM pinctrl)
- *
- * Both regions are already claimed by their respective subsystem drivers,
- * so we ioremap without requesting the resource.  Both SerDes instances
- * share the same TCSR block; only the per-PHY TLMM element offset differs.
- */
-#define TCSR_QREF_PHYS			0x01FD5000UL
-#define TCSR_QREF_SIZE			0x1000
-#define TCSR_QREFS_CXO_0_RPT0		0x00
-#define TCSR_QREFS_CXO_0_TX0		0x04
-#define TCSR_QREFS_CXO_0_RX3		0x08
-#define TCSR_QREFS_CXO_0_RX2		0x0C
-#define TCSR_QREFS_CXO_0_RPT2		0x10
-#define TCSR_QREFS_CXO_0_RX4		0x14
-#define TCSR_QREFS_CXO_0_RX0		0x18
-#define TCSR_QREFS_CXO_0_RPT1		0x1C
-#define TCSR_QREFS_CXO_0_RPT4		0x20
-#define TCSR_QREFS_CXO_0_RPT3		0x2C
-#define TCSR_CXO_REFGEN_BIAS_SEL	0x40
-#define TCSR_QREFS_CXO_0_RX1		0x38
-#define TCSR_QREFS_CXO_0_RX5		0x78
-#define TCSR_QREFS_CXO_0_TX1		0x7C
-
-#define TLMM_QREF_PHYS			0x0F1D8000UL
-#define TLMM_QREF_SIZE			0x12000
-#define TLMM_QREF_PHY_SEL_0		0x0000
-/* Per-PHY block: offset = 0x1000 * (phy_index + 1) */
-#define TLMM_PHY_QREF_ELEM_TX_RPT_SEL(n)	(0x1000 * ((n) + 1) + 0x000)
-#define TLMM_PHY_QREF_ELEM_RX_SEL(n)		(0x1000 * ((n) + 1) + 0x004)
-#define TLMM_PHY_QREF_ENABLE(n)			(0x1000 * ((n) + 1) + 0x008)
-
 static const char * const qcom_dwmac_usxgmii_clk_names[] = {
 	"sgmi_rx", "sgmi_tx", "sgmi_ref",
 };
 
 struct qcom_dwmac_usxgmii_phy_data {
 	struct regmap *regmap;
-	void __iomem *tcsr_qref;	/* TCSR QREF block (0x1FD5000) */
-	void __iomem *tlmm_qref;	/* TLMM QREF block (0xF1D8000) */
-	int phy_index;			/* 0 = EMAC0, 1 = EMAC1 */
 	struct clk_bulk_data clks[ARRAY_SIZE(qcom_dwmac_usxgmii_clk_names)];
 	struct regulator *vdda_0p9;
 	struct regulator *vdda_1p2;
@@ -229,47 +192,6 @@ qcom_dwmac_usxgmii_poll_status(struct regmap *rm, unsigned int reg,
 	return regmap_read_poll_timeout(rm, reg, val, val & bit, 1500, 750000);
 }
 
-/*
- * qcom_dwmac_usxgmii_enable_qref - enable CXO QREF network for SerDes.
- *
- * Must run before SerDes calibration.  Mirrors GearVM emac_phy_tcsr_tlmm_enable().
- * Sequence: TCSR bias → TLMM PHY elem → sleep → TCSR CXO config → sleep →
- *           TLMM PHY_SEL → sleep.
- */
-static void qcom_dwmac_usxgmii_enable_qref(struct qcom_dwmac_usxgmii_phy_data *data)
-{
-	void __iomem *tc = data->tcsr_qref;
-	void __iomem *tl = data->tlmm_qref;
-	int n = data->phy_index;
-
-	/* Step 1: bias and enable PHY QREF element */
-	writel(0x01,   tc + TCSR_CXO_REFGEN_BIAS_SEL);
-	writel(0xFFFF, tl + TLMM_PHY_QREF_ELEM_TX_RPT_SEL(n));
-	writel(0xFF,   tl + TLMM_PHY_QREF_ELEM_RX_SEL(n));
-	writel(0x01,   tl + TLMM_PHY_QREF_ENABLE(n));
-	msleep(10);
-
-	/* Step 2: configure TCSR CXO_0 routing */
-	writel(0x3807, tc + TCSR_QREFS_CXO_0_TX0);
-	writel(0x2807, tc + TCSR_QREFS_CXO_0_TX1);
-	writel(0x43,   tc + TCSR_QREFS_CXO_0_RX0);
-	writel(0x01,   tc + TCSR_QREFS_CXO_0_RX1);
-	writel(0x01,   tc + TCSR_QREFS_CXO_0_RX2);
-	writel(0x01,   tc + TCSR_QREFS_CXO_0_RX3);
-	writel(0x01,   tc + TCSR_QREFS_CXO_0_RX4);
-	writel(0x01,   tc + TCSR_QREFS_CXO_0_RX5);
-	writel(0x03,   tc + TCSR_QREFS_CXO_0_RPT0);
-	writel(0x03,   tc + TCSR_QREFS_CXO_0_RPT1);
-	writel(0x03,   tc + TCSR_QREFS_CXO_0_RPT2);
-	writel(0x03,   tc + TCSR_QREFS_CXO_0_RPT3);
-	writel(0x03,   tc + TCSR_QREFS_CXO_0_RPT4);
-	msleep(10);
-
-	/* Step 3: connect PHY to CXO_0 via TLMM mux */
-	writel(0x06, tl + TLMM_QREF_PHY_SEL_0);
-	msleep(10);
-}
-
 static int qcom_dwmac_usxgmii_calibrate(struct phy *phy)
 {
 	struct qcom_dwmac_usxgmii_phy_data *data = phy_get_drvdata(phy);
@@ -332,10 +254,6 @@ static int qcom_dwmac_usxgmii_power_on(struct phy *phy)
 	ret = clk_bulk_prepare_enable(ARRAY_SIZE(data->clks), data->clks);
 	if (ret)
 		goto err_clk;
-
-	/* Enable CXO QREF network before SerDes reset is deasserted. */
-	if (data->tcsr_qref && data->tlmm_qref)
-		qcom_dwmac_usxgmii_enable_qref(data);
 
 	usleep_range(2000, 4000);
 	return 0;
@@ -410,24 +328,6 @@ static int qcom_dwmac_usxgmii_probe(struct platform_device *pdev)
 					     &qcom_dwmac_usxgmii_regmap_cfg);
 	if (IS_ERR(data->regmap))
 		return PTR_ERR(data->regmap);
-
-	/* PHY index selects the per-PHY TLMM element (0=EMAC0, 1=EMAC1) */
-	if (of_property_read_u32(dev->of_node, "qcom,phy-index", &data->phy_index))
-		data->phy_index = 0;
-
-	/*
-	 * TCSR/TLMM QREF regions are shared system registers already owned by
-	 * their respective subsystem drivers (tcsr syscon, tlmm pinctrl).
-	 * Use ioremap without requesting the resource to avoid EBUSY.
-	 * Both SerDes instances share the same physical regions.
-	 */
-	data->tcsr_qref = devm_ioremap(dev, TCSR_QREF_PHYS, TCSR_QREF_SIZE);
-	if (!data->tcsr_qref)
-		dev_warn(dev, "failed to ioremap TCSR QREF, QREF enable skipped\n");
-
-	data->tlmm_qref = devm_ioremap(dev, TLMM_QREF_PHYS, TLMM_QREF_SIZE);
-	if (!data->tlmm_qref)
-		dev_warn(dev, "failed to ioremap TLMM QREF, QREF enable skipped\n");
 
 	phy = devm_phy_create(dev, NULL, &qcom_dwmac_usxgmii_ops);
 	if (IS_ERR(phy))

@@ -3,6 +3,7 @@
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
+#include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -1733,6 +1734,50 @@ static const struct of_device_id nord_tlmm_of_match[] = {
 	{},
 };
 
+/*
+ * TLMM QREF block — enables the QREF element that routes CXO from the TCSR
+ * network to each SerDes PHY.  Programmed here because TLMM owns this range.
+ *
+ * Must be done after TCSR QREF CXO routing (tcsrcc-nord.c) and before the
+ * SerDes PHY driver calibrates.  Source: GearVM tcsr_tlmm_phy.h.
+ *
+ * TLMM_QREF_PHYS = 0x0F1D8000 (within TLMM pinctrl's mapped space).
+ * PHY_SEL_0 = 0x06 routes PHY0 (EMAC0 SerDes) to CXO_0.
+ * Each PHY's element block is at PHY_SEL_0_offset + 0x1000*(phy+1).
+ */
+#define TLMM_QREF_PHYS			0x0F1D8000UL
+#define TLMM_QREF_SIZE			0x12000
+#define TLMM_QREF_PHY_SEL_0		0x0000
+
+static void nord_tlmm_qref_init(struct device *dev)
+{
+	void __iomem *base;
+	int phy;
+
+	/* No resource claim — region is within the TLMM pinctrl block. */
+	base = devm_ioremap(dev, TLMM_QREF_PHYS, TLMM_QREF_SIZE);
+	if (!base) {
+		dev_warn(dev, "failed to map TLMM QREF, SerDes clocks may be absent\n");
+		return;
+	}
+
+	/* Initialize QREF element for each EMAC SerDes PHY (PHY0=EMAC0, PHY1=EMAC1) */
+	for (phy = 0; phy < 2; phy++) {
+		void __iomem *elem = base + 0x1000 * (phy + 1);
+
+		writel(0xFFFF, elem + 0x000);	/* QREF_ELEM_TX_RPT_SEL */
+		writel(0xFF,   elem + 0x004);	/* QREF_ELEM_RX_SEL */
+		writel(0x01,   elem + 0x008);	/* QREF_ENABLE */
+	}
+
+	msleep(10);
+
+	/* Select CXO_0 as the reference source for PHY0 (and PHY1 via same reg) */
+	writel(0x06, base + TLMM_QREF_PHY_SEL_0);
+
+	msleep(10);
+}
+
 static int nord_tlmm_probe(struct platform_device *pdev)
 {
 	const struct msm_pinctrl_soc_data *pinctrl_data;
@@ -1741,6 +1786,8 @@ static int nord_tlmm_probe(struct platform_device *pdev)
 	pinctrl_data = device_get_match_data(dev);
 	if (!pinctrl_data)
 		return -EINVAL;
+
+	nord_tlmm_qref_init(dev);
 
 	return msm_pinctrl_probe(pdev, &nord_tlmm);
 }
