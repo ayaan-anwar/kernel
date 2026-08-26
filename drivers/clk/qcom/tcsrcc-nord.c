@@ -334,6 +334,7 @@ MODULE_DEVICE_TABLE(of, tcsr_cc_nord_match_table);
 static void tcsr_cc_nord_qref_init(struct device *dev)
 {
 	void __iomem *base;
+	u32 val;
 
 	/* No resource claim — region is within the TCSR syscon block. */
 	base = devm_ioremap(dev, TCSR_QREF_PHYS, TCSR_QREF_SIZE);
@@ -357,6 +358,9 @@ static void tcsr_cc_nord_qref_init(struct device *dev)
 	writel(0x01,   base + 0x40);	/* REFGEN_BIAS_SEL */
 	writel(0x01,   base + 0x78);	/* RX5  */
 	writel(0x2807, base + 0x7C);	/* TX1  */
+
+	val = readl(base + 0x40);
+	dev_info(dev, "TCSR QREF init done: REFGEN_BIAS_SEL=0x%02x (expect 0x01)\n", val);
 }
 
 static int tcsr_cc_nord_probe(struct platform_device *pdev)
