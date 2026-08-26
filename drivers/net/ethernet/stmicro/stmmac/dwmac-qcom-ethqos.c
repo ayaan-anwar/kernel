@@ -808,7 +808,8 @@ static void ethqos_fix_mac_speed_usxgmii(void *bsp_priv,
 	struct qcom_ethqos *ethqos = bsp_priv;
 
 	ethqos->speed = speed;
-	if (ethqos->has_io_macro_ge_4 && speed == SPEED_10000)
+	if (ethqos->has_io_macro_ge_4 && speed == SPEED_10000 &&
+	    interface == PHY_INTERFACE_MODE_10GBASER)
 		ethqos_configure_10gbaser_iomacro(ethqos);
 	else
 		ethqos_configure_usxgmii(ethqos);
@@ -817,7 +818,8 @@ static void ethqos_fix_mac_speed_usxgmii(void *bsp_priv,
 	 * phylink does not call pcs_link_up() for fixed-link interfaces.
 	 * Drive the downstream VR_RST + speed selection + USXGMII_RST sequence
 	 * manually via the standalone direct XPCS driver so the TX encoder is
-	 * armed in 10GBASE-R 64B/66B mode before MAC TX is enabled.
+	 * armed in the correct mode (64B/66B for 10GBASE-R, USXGMII for USXGMII)
+	 * before MAC TX is enabled.
 	 */
 	if (ethqos->xpcs_pcs && ethqos->xpcs_pcs->ops->pcs_link_up)
 		ethqos->xpcs_pcs->ops->pcs_link_up(ethqos->xpcs_pcs,

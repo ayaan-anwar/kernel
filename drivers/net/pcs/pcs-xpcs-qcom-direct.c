@@ -518,7 +518,11 @@ static int qcom_xpcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 		qxpcs->phy_interface = interface;
 	}
 
-	return qcom_xpcs_do_config(qxpcs, interface);
+	ret = qcom_xpcs_do_config(qxpcs, interface);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
 /* ---- link status -------------------------------------------------------- */
