@@ -182,25 +182,6 @@ static void qxd_10g_link_up(struct qcom_xpcs_direct *q, int speed)
 
 /* ---- phylink_pcs_ops ---------------------------------------------------- */
 
-static int qxd_pcs_pre_init(struct phylink_pcs *pcs)
-{
-	struct qcom_xpcs_direct *q = to_qxd(pcs);
-
-	/*
-	 * Enable XPCS Tx→Rx loopback before the DMA reset so the MAC has a
-	 * valid clk_rx_i source.  This mirrors xpcs_loopback(true) in the
-	 * upstream DW XPCS core (pcs_pre_init with rxc_always_on):
-	 *   USXGMII_EN=1 in VR_XS_PCS_DIG_CTRL1 → XPCS clock loopback active
-	 *   BMCR_LOOPBACK=1 in SR_MII_CTRL       → loop TX clock back to RX
-	 * These bits are kept set through pcs_link_up (not cleared), which
-	 * matches the downstream driver's behaviour.
-	 */
-	qxd_rmw(q, QXPCS_VR_XS_PCS_DIG_CTRL1, QXPCS_USXGMII_EN, QXPCS_USXGMII_EN);
-	qxd_rmw(q, QXPCS_SR_MII_CTRL, BMCR_LOOPBACK, BMCR_LOOPBACK);
-	dev_info(q->dev, "pcs_pre_init: XPCS Tx→Rx loopback enabled (clk_rx_i source)\n");
-	return 0;
-}
-
 static int qxd_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 			  phy_interface_t interface,
 			  const unsigned long *advertising,
@@ -232,25 +213,26 @@ static void qxd_pcs_link_up(struct phylink_pcs *pcs, unsigned int neg_mode,
 	 * Downstream sequence for PHY_INTERFACE_MODE_10GBASER:
 	 * qcom_xpcs_link_up_usxgmii() + qcom_xpcs_reset_usxgmii()
 	 *
-	 * Note: BMCR_LOOPBACK and USXGMII_EN are NOT cleared here.
-	 * They were set in pcs_pre_init and remain active so the XPCS
-	 * Tx→Rx loopback continues to source clk_rx_i for the MAC.
-	 * The downstream driver keeps this loopback throughout operation.
-	 * qcom_xpcs_serdes_reset() is skipped — SerDes power is managed
-	 * by phy-qcom-usxgmii-eth.c via phy_power_off/on.
+	 * clk_rx_i is supplied by the EMAC wrapper SGMII Tx→Rx loopback
+	 * (needs_sgmii_loopback), not by the XPCS.  Clear BMCR_LOOPBACK and
+	 * USXGMII_EN so the XPCS drives real 10GBASE-R 64B/66B toward the
+	 * SerDes instead of looping back internally.
 	 */
 
 	/* SR_XS_PCS_CTRL2 bits[3:0] = BASE-R (§7.5.4 step 1) */
 	qxd_rmw(q, QXPCS_SR_XS_PCS_CTRL2, QXPCS_CTRL2_TYPE_MASK, QXPCS_CTRL2_10GBR);
 
+	/* Clear XPCS internal loopback and USXGMII mode */
+	qxd_rmw(q, QXPCS_SR_MII_CTRL, BMCR_LOOPBACK, 0);
+	qxd_rmw(q, QXPCS_VR_XS_PCS_DIG_CTRL1, QXPCS_USXGMII_EN, 0);
+
 	/* Run downstream restart sequence */
 	qxd_10g_link_up(q, speed);
 
-	dev_info(q->dev, "pcs_link_up done: loopback kept, TX encoder armed\n");
+	dev_info(q->dev, "pcs_link_up done: loopback cleared, TX encoder armed\n");
 }
 
 static const struct phylink_pcs_ops qxd_ops = {
-	.pcs_pre_init  = qxd_pcs_pre_init,
 	.pcs_config    = qxd_pcs_config,
 	.pcs_get_state = qxd_pcs_get_state,
 	.pcs_link_up   = qxd_pcs_link_up,
