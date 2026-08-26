@@ -64,9 +64,6 @@
 /* VR_XS_PCS_DIG_CTRL1 bit[9] — USXGMII mode enable */
 #define QXPCS_USXGMII_EN	BIT(9)
 
-/* SR_XS_PCS_STS1 bit[2] — receive link status (DW_SR_XS_PCS_STS1) */
-#define QXPCS_STS1_RLS		BIT(2)
-
 /* SR_XS_PCS_STS2 bit[11] — 10GBASE-R block lock (non-latching) */
 #define QXPCS_STS2_BLK_LOCK	BIT(11)
 
@@ -120,21 +117,6 @@ static int qxd_poll_clr(struct qcom_xpcs_direct *q, u32 off, u32 b)
 	return -ETIMEDOUT;
 }
 
-/* Poll register 'off' until bit 'b' sets. Non-fatal for fixed-link. */
-static int qxd_poll_set(struct qcom_xpcs_direct *q, u32 off, u32 b)
-{
-	int i;
-
-	for (i = 0; i < 2000; i++) {
-		if (qxd_rd(q, off) & b)
-			return 0;
-		udelay(1);
-	}
-	dev_info(q->dev, "poll-set timeout: off=0x%03x bit=0x%04x (non-fatal)\n",
-		 off, b);
-	return -ETIMEDOUT;
-}
-
 /*
  * qxd_10g_link_up - downstream link-up sequence for 10GBASE-R.
  *
@@ -171,13 +153,6 @@ static void qxd_10g_link_up(struct qcom_xpcs_direct *q, int speed)
 	/* Step 4: USXGMII_RST in VR_XS_PCS_DIG_CTRL1 — arms TX encoder */
 	qxd_rmw(q, QXPCS_VR_XS_PCS_DIG_CTRL1, QXPCS_USXGMII_RST, QXPCS_USXGMII_RST);
 	qxd_poll_clr(q, QXPCS_VR_XS_PCS_DIG_CTRL1, QXPCS_USXGMII_RST);
-
-	/* Step 5 (10GBASER case): clear latching STS1 bits then poll RLS */
-	qxd_rd(q, QXPCS_SR_XS_PCS_STS1);
-	if (qxd_poll_set(q, QXPCS_SR_XS_PCS_STS1, QXPCS_STS1_RLS))
-		dev_info(q->dev, "RLS not yet set (fixed-link, continuing)\n");
-	else
-		dev_info(q->dev, "10G RLS=1: PCS TX link established\n");
 }
 
 /* ---- phylink_pcs_ops ---------------------------------------------------- */
