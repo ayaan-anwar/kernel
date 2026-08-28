@@ -927,6 +927,17 @@ static int qcom_xpcs_probe(struct platform_device *pdev)
 	/* Sentinel so first pcs_config() call always runs select_mode() */
 	qxpcs->phy_interface = PHY_INTERFACE_MODE_NA;
 
+	/* Enable clocks before any hardware access — pclk is needed for register reads */
+	qxpcs->n_clks = devm_clk_bulk_get_all(dev, &qxpcs->clks);
+	if (qxpcs->n_clks < 0)
+		return dev_err_probe(dev, qxpcs->n_clks, "failed to get clocks\n");
+
+	if (qxpcs->n_clks > 0) {
+		ret = clk_bulk_prepare_enable(qxpcs->n_clks, qxpcs->clks);
+		if (ret)
+			return dev_err_probe(dev, ret, "failed to enable clocks\n");
+	}
+
 	/* Identify the XPCS hardware */
 	xpcs_id = xpcs_get_id(qxpcs);
 	if (xpcs_id == 0xffffffff)
@@ -950,17 +961,6 @@ static int qcom_xpcs_probe(struct platform_device *pdev)
 	ret = xpcs_soft_reset(qxpcs);
 	if (ret)
 		return dev_err_probe(dev, ret, "XPCS soft reset failed\n");
-
-	/* Enable XPCS clocks listed in the DT (no-op if none) */
-	qxpcs->n_clks = devm_clk_bulk_get_all(dev, &qxpcs->clks);
-	if (qxpcs->n_clks < 0)
-		return dev_err_probe(dev, qxpcs->n_clks, "failed to get clocks\n");
-
-	if (qxpcs->n_clks > 0) {
-		ret = clk_bulk_prepare_enable(qxpcs->n_clks, qxpcs->clks);
-		if (ret)
-			return dev_err_probe(dev, ret, "failed to enable clocks\n");
-	}
 
 	qxpcs->pcs.ops  = &qcom_xpcs_phylink_ops;
 	qxpcs->pcs.poll = true;
@@ -992,7 +992,7 @@ static struct platform_driver pcs_xpcs_qcom_driver = {
 	.probe	= qcom_xpcs_probe,
 	.remove	= qcom_xpcs_remove,
 	.driver	= {
-		.name		= "dwxpcs",
+		.name		= "dwxpcs_qcom",
 		.of_match_table	= of_match_ptr(qcom_xpcs_match),
 	},
 };

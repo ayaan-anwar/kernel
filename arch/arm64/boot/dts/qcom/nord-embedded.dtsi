@@ -1054,8 +1054,20 @@
 		reg = <0x0 0x088f8000 0x0 0x4000>;
 		clocks = <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_RX_CLK>,
 			 <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_TX_CLK>,
-			 <&tcsrcc TCSR_UX_SGMII_0_CLKREF_EN>;
-		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref";
+			 <&tcsrcc TCSR_UX_SGMII_0_CLKREF_EN>,
+			 <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_RX_CLK_SRC>,
+			 <&segcc SE_GCC_EMAC0_CC_SGMIIPHY_TX_CLK_SRC>,
+			 <&segcc SE_GCC_EMAC0_SGMIIPHY_MAC_RCLK_SRC>,
+			 <&segcc SE_GCC_EMAC0_SGMIIPHY_MAC_TCLK_SRC>,
+			 <&emac0_sgmiiphy_rclk>,
+			 <&emac0_sgmiiphy_tclk>,
+			 <&emac0_sgmiiphy_mac_rclk>,
+			 <&emac0_sgmiiphy_mac_tclk>;
+		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref",
+			      "sgmiiphy_rx_src", "sgmiiphy_tx_src",
+			      "mac_rclk_src", "mac_tclk_src",
+			      "sgmiiphy_rclk", "sgmiiphy_tclk",
+			      "sgmiiphy_mac_rclk", "sgmiiphy_mac_tclk";
 		#phy-cells = <0>;
 	};
 
@@ -1064,8 +1076,20 @@
 		reg = <0x0 0x088fc000 0x0 0x4000>;
 		clocks = <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_RX_CLK>,
 			 <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_TX_CLK>,
-			 <&tcsrcc TCSR_UX_SGMII_1_CLKREF_EN>;
-		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref";
+			 <&tcsrcc TCSR_UX_SGMII_1_CLKREF_EN>,
+			 <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_RX_CLK_SRC>,
+			 <&segcc SE_GCC_EMAC1_CC_SGMIIPHY_TX_CLK_SRC>,
+			 <&segcc SE_GCC_EMAC1_SGMIIPHY_MAC_RCLK_SRC>,
+			 <&segcc SE_GCC_EMAC1_SGMIIPHY_MAC_TCLK_SRC>,
+			 <&emac1_sgmiiphy_rclk>,
+			 <&emac1_sgmiiphy_tclk>,
+			 <&emac1_sgmiiphy_mac_rclk>,
+			 <&emac1_sgmiiphy_mac_tclk>;
+		clock-names = "sgmi_rx", "sgmi_tx", "sgmi_ref",
+			      "sgmiiphy_rx_src", "sgmiiphy_tx_src",
+			      "mac_rclk_src", "mac_tclk_src",
+			      "sgmiiphy_rclk", "sgmiiphy_tclk",
+			      "sgmiiphy_mac_rclk", "sgmiiphy_mac_tclk";
 		#phy-cells = <0>;
 	};
 

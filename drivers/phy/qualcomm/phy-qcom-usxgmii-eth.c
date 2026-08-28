@@ -14,8 +14,8 @@
  *
  * Register values from the GearVM Nord V2 10G sequence.
  *
- * QREF CXO programming is handled by the tcsrcc and pinctrl drivers
- * which own those address spaces and probe before this driver.
+ * QREF CXO routing registers (TCSR/TLMM) are iomapped directly at
+ * probe time and programmed in power_on before SerDes calibration.
  *
  * Copyright (c) 2024 Qualcomm Technologies, Inc.
  */
@@ -55,8 +55,51 @@
 #define USXGMII_VDDA_0P9_UA	40210
 #define USXGMII_VDDA_1P2_UA	12520
 
+/* TCSR QREF CXO configuration — GearVM Nord V2 values, same for EMAC0 and EMAC1
+ * Base and offsets verified against IPCAT nordschleife_2.0.
+ */
+#define TCSR_PHY_BASE			0x01FD5000UL
+#define TCSR_PHY_SIZE			0x1000
+#define TCSR_QREFS_CXO0_RPT0_CONFIG	0x00
+#define TCSR_QREFS_CXO0_TX0_CONFIG	0x04
+#define TCSR_QREFS_CXO0_RX3_CONFIG	0x08
+#define TCSR_QREFS_CXO0_RX2_CONFIG	0x0c
+#define TCSR_QREFS_CXO0_RPT2_CONFIG	0x10
+#define TCSR_QREFS_CXO0_RX4_CONFIG	0x14
+#define TCSR_QREFS_CXO0_RX0_CONFIG	0x18
+#define TCSR_QREFS_CXO0_RPT1_CONFIG	0x1c
+#define TCSR_QREFS_CXO0_RPT4_CONFIG	0x20
+#define TCSR_QREFS_CXO0_RPT3_CONFIG	0x2c
+#define TCSR_QREFS_CXO0_RPT5_CONFIG	0x30
+#define TCSR_QREFS_CXO0_RPT6_CONFIG	0x34
+#define TCSR_QREFS_CXO0_RX1_CONFIG	0x38
+#define TCSR_QREFS_CXO0_RPT7_CONFIG	0x3c
+#define TCSR_CXO_REFGEN_BIAS_SEL	0x40
+#define TCSR_QREFS_CXO0_RX5_CONFIG	0x78
+#define TCSR_QREFS_CXO0_TX1_CONFIG	0x7c
+
+/* TLMM PHY0 QREF routing — base and offsets verified against IPCAT nordschleife_2.0 */
+#define TLMM_PHY_BASE			0x0F1D8000UL
+#define TLMM_PHY_SIZE			0x12000
+#define TLMM_QREF_PHY_SEL_0		0x0000
+#define TLMM_PHY0_QREF_TX_RPT_SEL	0x1000
+#define TLMM_PHY0_QREF_RX_SEL		0x1004
+#define TLMM_PHY0_QREF_ENABLE		0x1008
+
 static const char * const qcom_dwmac_usxgmii_clk_names[] = {
 	"sgmi_rx", "sgmi_tx", "sgmi_ref",
+};
+
+/* Mux source clocks (clk_regmap_mux) — switched to SerDes output after power-on */
+static const char * const qcom_dwmac_usxgmii_mux_clk_names[] = {
+	"sgmiiphy_rx_src", "sgmiiphy_tx_src",
+	"mac_rclk_src",    "mac_tclk_src",
+};
+
+/* SerDes output fixed clocks — become the new parents of the mux above */
+static const char * const qcom_dwmac_usxgmii_phy_clk_names[] = {
+	"sgmiiphy_rclk",     "sgmiiphy_tclk",
+	"sgmiiphy_mac_rclk", "sgmiiphy_mac_tclk",
 };
 
 struct qcom_dwmac_usxgmii_phy_data {
@@ -64,6 +107,10 @@ struct qcom_dwmac_usxgmii_phy_data {
 	struct clk_bulk_data clks[ARRAY_SIZE(qcom_dwmac_usxgmii_clk_names)];
 	struct regulator *vdda_0p9;
 	struct regulator *vdda_1p2;
+	void __iomem *tcsr_base;
+	void __iomem *tlmm_base;
+	struct clk *mux_clks[ARRAY_SIZE(qcom_dwmac_usxgmii_mux_clk_names)];
+	struct clk *phy_clks[ARRAY_SIZE(qcom_dwmac_usxgmii_phy_clk_names)];
 };
 
 #define com_w(rm, off, v)  regmap_write((rm), QSERDES_COM_BASE + (off), (v))
@@ -232,6 +279,51 @@ static int qcom_dwmac_usxgmii_calibrate(struct phy *phy)
 	return 0;
 }
 
+static void qcom_dwmac_usxgmii_qref_init(struct device *dev,
+					   struct qcom_dwmac_usxgmii_phy_data *data)
+{
+	void __iomem *tc = data->tcsr_base;
+	void __iomem *tl = data->tlmm_base;
+
+	/* Step 1: bias select + PHY0 QREF enable */
+	writel(0x01,   tc + TCSR_CXO_REFGEN_BIAS_SEL);
+	writel(0xFFFF, tl + TLMM_PHY0_QREF_TX_RPT_SEL);
+	writel(0xFF,   tl + TLMM_PHY0_QREF_RX_SEL);
+	writel(0x01,   tl + TLMM_PHY0_QREF_ENABLE);
+	msleep(10);
+
+	/* Step 2: QREFS CXO_0 consumer config — from GearVM emac_phy_tcsr_tlmm_enable */
+	writel(0x3807, tc + TCSR_QREFS_CXO0_TX0_CONFIG);
+	writel(0x2807, tc + TCSR_QREFS_CXO0_TX1_CONFIG);
+	writel(0x43,   tc + TCSR_QREFS_CXO0_RX0_CONFIG);
+	writel(0x01,   tc + TCSR_QREFS_CXO0_RX1_CONFIG);
+	writel(0x01,   tc + TCSR_QREFS_CXO0_RX2_CONFIG);
+	writel(0x01,   tc + TCSR_QREFS_CXO0_RX3_CONFIG);
+	writel(0x01,   tc + TCSR_QREFS_CXO0_RX4_CONFIG);
+	writel(0x01,   tc + TCSR_QREFS_CXO0_RX5_CONFIG);
+	writel(0x03,   tc + TCSR_QREFS_CXO0_RPT0_CONFIG);
+	writel(0x03,   tc + TCSR_QREFS_CXO0_RPT1_CONFIG);
+	writel(0x03,   tc + TCSR_QREFS_CXO0_RPT2_CONFIG);
+	writel(0x03,   tc + TCSR_QREFS_CXO0_RPT3_CONFIG);
+	writel(0x03,   tc + TCSR_QREFS_CXO0_RPT4_CONFIG);
+	msleep(10);
+
+	/* Step 3: PHY0 routing select */
+	writel(0x06, tl + TLMM_QREF_PHY_SEL_0);
+	msleep(10);
+
+	dev_info(dev, "TCSR BIAS_SEL=0x%x TX0=0x%x RX0=0x%x RPT0=0x%x\n",
+		 readl(tc + TCSR_CXO_REFGEN_BIAS_SEL),
+		 readl(tc + TCSR_QREFS_CXO0_TX0_CONFIG),
+		 readl(tc + TCSR_QREFS_CXO0_RX0_CONFIG),
+		 readl(tc + TCSR_QREFS_CXO0_RPT0_CONFIG));
+	dev_info(dev, "TLMM PHY0 TX_RPT=0x%x RX=0x%x EN=0x%x SEL0=0x%x\n",
+		 readl(tl + TLMM_PHY0_QREF_TX_RPT_SEL),
+		 readl(tl + TLMM_PHY0_QREF_RX_SEL),
+		 readl(tl + TLMM_PHY0_QREF_ENABLE),
+		 readl(tl + TLMM_QREF_PHY_SEL_0));
+}
+
 static int qcom_dwmac_usxgmii_power_on(struct phy *phy)
 {
 	struct qcom_dwmac_usxgmii_phy_data *data = phy_get_drvdata(phy);
@@ -254,6 +346,15 @@ static int qcom_dwmac_usxgmii_power_on(struct phy *phy)
 	ret = clk_bulk_prepare_enable(ARRAY_SIZE(data->clks), data->clks);
 	if (ret)
 		goto err_clk;
+
+	qcom_dwmac_usxgmii_qref_init(phy->dev.parent, data);
+
+	for (int i = 0; i < ARRAY_SIZE(data->mux_clks); i++) {
+		ret = clk_set_parent(data->mux_clks[i], data->phy_clks[i]);
+		if (ret)
+			dev_warn(phy->dev.parent, "clk_set_parent %s failed: %d\n",
+				 qcom_dwmac_usxgmii_mux_clk_names[i], ret);
+	}
 
 	usleep_range(2000, 4000);
 	return 0;
@@ -329,6 +430,14 @@ static int qcom_dwmac_usxgmii_probe(struct platform_device *pdev)
 	if (IS_ERR(data->regmap))
 		return PTR_ERR(data->regmap);
 
+	data->tcsr_base = devm_ioremap(dev, TCSR_PHY_BASE, TCSR_PHY_SIZE);
+	if (!data->tcsr_base)
+		return dev_err_probe(dev, -ENOMEM, "failed to map TCSR\n");
+
+	data->tlmm_base = devm_ioremap(dev, TLMM_PHY_BASE, TLMM_PHY_SIZE);
+	if (!data->tlmm_base)
+		return dev_err_probe(dev, -ENOMEM, "failed to map TLMM\n");
+
 	phy = devm_phy_create(dev, NULL, &qcom_dwmac_usxgmii_ops);
 	if (IS_ERR(phy))
 		return PTR_ERR(phy);
@@ -338,6 +447,21 @@ static int qcom_dwmac_usxgmii_probe(struct platform_device *pdev)
 	ret = devm_clk_bulk_get(dev, ARRAY_SIZE(data->clks), data->clks);
 	if (ret)
 		return ret;
+
+	for (int i = 0; i < ARRAY_SIZE(data->mux_clks); i++) {
+		data->mux_clks[i] = devm_clk_get(dev,
+						  qcom_dwmac_usxgmii_mux_clk_names[i]);
+		if (IS_ERR(data->mux_clks[i]))
+			return dev_err_probe(dev, PTR_ERR(data->mux_clks[i]),
+					     "failed to get mux clk %s\n",
+					     qcom_dwmac_usxgmii_mux_clk_names[i]);
+		data->phy_clks[i] = devm_clk_get(dev,
+						  qcom_dwmac_usxgmii_phy_clk_names[i]);
+		if (IS_ERR(data->phy_clks[i]))
+			return dev_err_probe(dev, PTR_ERR(data->phy_clks[i]),
+					     "failed to get phy clk %s\n",
+					     qcom_dwmac_usxgmii_phy_clk_names[i]);
+	}
 
 	data->vdda_0p9 = devm_regulator_get(dev, "vdda-0p9");
 	if (IS_ERR(data->vdda_0p9))
