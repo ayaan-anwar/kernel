@@ -111,6 +111,11 @@ struct qcom_dwmac_usxgmii_phy_data {
 	void __iomem *tlmm_base;
 	struct clk *mux_clks[ARRAY_SIZE(qcom_dwmac_usxgmii_mux_clk_names)];
 	struct clk *phy_clks[ARRAY_SIZE(qcom_dwmac_usxgmii_phy_clk_names)];
+	/* Original mux parents (TCXO) saved before switching to SerDes output.
+	 * Restored in power_off so BRANCH_HALT checks on cc_sgmiiphy_rx/tx_clk pass.
+	 * With SerDes output as mux source the hardware halt bit never asserts.
+	 */
+	struct clk *saved_mux_parents[ARRAY_SIZE(qcom_dwmac_usxgmii_mux_clk_names)];
 };
 
 #define com_w(rm, off, v)  regmap_write((rm), QSERDES_COM_BASE + (off), (v))
@@ -350,6 +355,7 @@ static int qcom_dwmac_usxgmii_power_on(struct phy *phy)
 	qcom_dwmac_usxgmii_qref_init(phy->dev.parent, data);
 
 	for (int i = 0; i < ARRAY_SIZE(data->mux_clks); i++) {
+		data->saved_mux_parents[i] = clk_get_parent(data->mux_clks[i]);
 		ret = clk_set_parent(data->mux_clks[i], data->phy_clks[i]);
 		if (ret)
 			dev_warn(phy->dev.parent, "clk_set_parent %s failed: %d\n",
@@ -376,6 +382,15 @@ static int qcom_dwmac_usxgmii_power_off(struct phy *phy)
 
 	pcs_w(rm, QPHY_PCS_TX_MID_TERM_CTRL2, 0x08);
 	pcs_w(rm, QPHY_PCS_SW_RESET,          0x01);
+
+	/* Restore mux parents to TCXO before disabling branch clocks.
+	 * BRANCH_HALT on cc_sgmiiphy_rx/tx_clk requires the branch to truly stop.
+	 * With a free-running SerDes output as mux source the halt bit never asserts.
+	 */
+	for (int i = 0; i < ARRAY_SIZE(data->mux_clks); i++) {
+		if (data->saved_mux_parents[i])
+			clk_set_parent(data->mux_clks[i], data->saved_mux_parents[i]);
+	}
 
 	clk_bulk_disable_unprepare(ARRAY_SIZE(data->clks), data->clks);
 
