@@ -1311,14 +1311,11 @@
 		#phy-cells = <0>;
 	};
 
-	xpcs0: xpcs@1a14000 {
-		compatible = "qcom,xpcs";
+	xpcs0: pcs@1a14000 {
+		compatible = "qcom,nord-xpcs";
 		reg = <0x0 0x01a14000 0x0 0x5100>;
-		clocks = <&segcc SE_GCC_EMAC0_RPCS_RX_CLK>,
-			 <&segcc SE_GCC_EMAC0_RPCS_TX_CLK>,
-			 <&segcc SE_GCC_EMAC0_XGXS_RX_CLK>,
-			 <&segcc SE_GCC_EMAC0_XGXS_TX_CLK>;
-		clock-names = "rpcs_rx", "rpcs_tx", "xgxs_rx", "xgxs_tx";
+		clocks = <&segcc SE_GCC_EMAC0_CNOC_APB_CLK>;
+		clock-names = "apb";
 		power-domains = <&segcc SE_GCC_EMAC0_GDSC>;
 	};
 
@@ -1458,14 +1455,11 @@
 		};
 	};
 
-	xpcs1: xpcs@1a94000 {
-		compatible = "qcom,xpcs";
+	xpcs1: pcs@1a94000 {
+		compatible = "qcom,nord-xpcs";
 		reg = <0x0 0x01a94000 0x0 0x5100>;
-		clocks = <&segcc SE_GCC_EMAC1_RPCS_RX_CLK>,
-			 <&segcc SE_GCC_EMAC1_RPCS_TX_CLK>,
-			 <&segcc SE_GCC_EMAC1_XGXS_RX_CLK>,
-			 <&segcc SE_GCC_EMAC1_XGXS_TX_CLK>;
-		clock-names = "rpcs_rx", "rpcs_tx", "xgxs_rx", "xgxs_tx";
+		clocks = <&segcc SE_GCC_EMAC1_CNOC_APB_CLK>;
+		clock-names = "apb";
 		power-domains = <&segcc SE_GCC_EMAC1_GDSC>;
 	};
 
