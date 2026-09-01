@@ -723,6 +723,22 @@ static struct clk_branch se_gcc_emac0_cnoc_apb_clk = {
 	},
 };
 
+/* SE_GCC_EMAC1_CNOC_APB_CBCR at 0x25018 (IPCAT nordschleife_2.0).
+ * EMAC1-specific APB clock gate; same semantics as EMAC0 (pclk for ethernet1).
+ */
+static struct clk_branch se_gcc_emac1_cnoc_apb_clk = {
+	.halt_reg = 0x25018,
+	.halt_check = BRANCH_HALT,
+	.clkr = {
+		.enable_reg = 0x25018,
+		.enable_mask = BIT(0),
+		.hw.init = &(const struct clk_init_data) {
+			.name = "se_gcc_emac1_cnoc_apb_clk",
+			.ops = &clk_branch2_ops,
+		},
+	},
+};
+
 static struct clk_branch se_gcc_emac0_axi_clk = {
 	.halt_reg = 0x2401c,
 	.halt_check = BRANCH_HALT_VOTED,
@@ -1546,6 +1562,7 @@ static struct clk_regmap *se_gcc_nord_clocks[] = {
 	[SE_GCC_QUPV3_WRAP1_S6_CLK_SRC] = &se_gcc_qupv3_wrap1_s6_clk_src.clkr,
 	[SE_GCC_QUPV3_WRAP1_S_AHB_CLK] = &se_gcc_qupv3_wrap1_s_ahb_clk.clkr,
 	[SE_GCC_EMAC0_CNOC_APB_CLK] = &se_gcc_emac0_cnoc_apb_clk.clkr,
+	[SE_GCC_EMAC1_CNOC_APB_CLK] = &se_gcc_emac1_cnoc_apb_clk.clkr,
 };
 
 static struct gdsc *se_gcc_nord_gdscs[] = {
