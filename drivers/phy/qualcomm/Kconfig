@@ -247,11 +247,12 @@ config PHY_QCOM_IPQ806X_USB
 	  Qualcomm USB3.0 DWC3 controller on ipq806x SoC. This driver supports
 	  both HS and SS PHY controllers.
 
-config PHY_QCOM_SGMII_ETH
-	tristate "Qualcomm DWMAC SGMII SerDes/PHY driver"
+config PHY_QCOM_DWMAC_SERDES
+	tristate "Qualcomm DWMAC Ethernet SerDes PHY driver (SGMII/USXGMII)"
 	depends on OF && (ARCH_QCOM || COMPILE_TEST)
 	depends on HAS_IOMEM
 	select GENERIC_PHY
 	help
-	  Enable this to support the internal SerDes/SGMII PHY on various
-	  Qualcomm chipsets.
+	  Enable this to support the internal SerDes PHY for the Qualcomm
+	  DWMAC Ethernet controller.  Covers the SGMII/2500BASE-X variant
+	  (sa8775p and compatible) and the 10G USXGMII variant (SA8797P/Nord).
