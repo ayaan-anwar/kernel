@@ -78,8 +78,22 @@
 #define DW_VR_MII_C37_ANSGM_SP_1000		0x2
 #define DW_VR_MII_C37_ANSGM_SP_LNKSTS		BIT(4)
 
-#define DW_VR_MII_EEE_MCTRL0		0x8006
-#define DW_VR_MII_EEE_LTX_EN			BIT(0)  /* LPI Tx Enable */
+/* VR_MII_AN_INTR_STS USXGMII-specific fields (DW_AN_C37_USXGMII) */
+#define DW_VR_MII_USXG_ANSGM_SP_LNKSTS		BIT(14)
+#define DW_VR_MII_USXG_ANSGM_SP		GENMASK(12, 10)
+#define DW_VR_MII_USXG_SP_10			0
+#define DW_VR_MII_USXG_SP_100			1
+#define DW_VR_MII_USXG_SP_1000			2
+#define DW_VR_MII_USXG_SP_10G			3
+#define DW_VR_MII_USXG_SP_2P5G			4
+#define DW_VR_MII_USXG_SP_5G			5
+#define DW_VR_MII_ANCMPLT_INTR			BIT(0)
+
+/* VR_XS_PCS_KR_CTRL: USXGMII multi-port speed selection */
+#define DW_VR_XS_PCS_KR_CTRL		0x000e
+#define DW_USXG_MODE_SEL		GENMASK(12, 10)
+
+#define DW_VR_MII_EEE_MCTRL0		0x8006#define DW_VR_MII_EEE_LTX_EN			BIT(0)  /* LPI Tx Enable */
 #define DW_VR_MII_EEE_LRX_EN			BIT(1)  /* LPI Rx Enable */
 #define DW_VR_MII_EEE_TX_QUIET_EN		BIT(2)  /* Tx Quiet Enable */
 #define DW_VR_MII_EEE_RX_QUIET_EN		BIT(3)  /* Rx Quiet Enable */
