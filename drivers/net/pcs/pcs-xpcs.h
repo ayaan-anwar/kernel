@@ -93,7 +93,8 @@
 #define DW_VR_XS_PCS_KR_CTRL		0x000e
 #define DW_USXG_MODE_SEL		GENMASK(12, 10)
 
-#define DW_VR_MII_EEE_MCTRL0		0x8006#define DW_VR_MII_EEE_LTX_EN			BIT(0)  /* LPI Tx Enable */
+#define DW_VR_MII_EEE_MCTRL0		0x8006
+#define DW_VR_MII_EEE_LTX_EN			BIT(0)  /* LPI Tx Enable */
 #define DW_VR_MII_EEE_LRX_EN			BIT(1)  /* LPI Rx Enable */
 #define DW_VR_MII_EEE_TX_QUIET_EN		BIT(2)  /* Tx Quiet Enable */
 #define DW_VR_MII_EEE_RX_QUIET_EN		BIT(3)  /* Rx Quiet Enable */
