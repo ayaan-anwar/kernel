@@ -7,6 +7,7 @@
 #include <linux/platform_device.h>
 #include <linux/phy.h>
 #include <linux/phy/phy.h>
+#include <linux/pcs/pcs-xpcs.h>
 #include <linux/interconnect.h>
 
 #include "stmmac.h"
@@ -153,8 +154,8 @@ struct ethqos_emac_driver_data {
 struct qcom_ethqos {
 	struct platform_device *pdev;
 	void __iomem *rgmii_base;
-	void __iomem *xpcs_base;	/* direct XPCS APB window for SR_MII_CTRL readback */
 	struct clk *link_clk;
+	struct clk *eee_clk;
 	struct phy *serdes_phy;
 	phy_interface_t phy_mode;
 	int speed;
@@ -932,6 +933,19 @@ static int ethqos_clks_config(void *priv, bool enabled)
 			}
 		}
 
+		if (ethqos->eee_clk) {
+			ret = clk_prepare_enable(ethqos->eee_clk);
+			if (ret) {
+				dev_err(&ethqos->pdev->dev,
+					"eee_clk enable failed: %d\n", ret);
+				if (ethqos->num_noc_clks)
+					clk_bulk_disable_unprepare(ethqos->num_noc_clks,
+								   ethqos->noc_clks);
+				clk_disable_unprepare(ethqos->link_clk);
+				return ret;
+			}
+		}
+
 		/* Enable functional clock to prevent DMA reset to timeout due
 		 * to lacking PHY clock after the hardware block has been power
 		 * cycled. The actual configuration will be adjusted once
@@ -940,6 +954,7 @@ static int ethqos_clks_config(void *priv, bool enabled)
 		qcom_ethqos_set_sgmii_loopback(ethqos, true);
 		ethqos_set_func_clk_en(ethqos);
 	} else {
+		clk_disable_unprepare(ethqos->eee_clk);
 		if (ethqos->num_noc_clks)
 			clk_bulk_disable_unprepare(ethqos->num_noc_clks,
 						   ethqos->noc_clks);
@@ -1018,73 +1033,33 @@ static void qcom_ethqos_hdma_cfg(struct plat_stmmacenet_data *plat)
 }
 
 /*
- * XPCS APB offset of SR_MII_CTRL (MDIO_MMD_VEND2 standard reg 0).
- * From the XPCS APB map: 0x4000–0x4FFF are SR_MII standard registers;
- * SR_MII_CTRL = xpcs_base + (reg << 2) + 0x4000, reg=0 → offset 0x4000.
- * For EMAC0: physical address = 0x1A14000 + 0x4000 = 0x1A18000.
+ * Retrieve struct dw_xpcs * from the XPCS platform device referenced by
+ * the ethernet node's pcs-handle property and wire it into stmmac's
+ * phylink PCS slot.  Called from stmmac_pcs_setup() via plat_dat->pcs_init.
  */
-#define QCOM_XPCS_SR_MII_CTRL_OFF	0x4000
-
-/*
- * Nord EMAC (SA8797P, 10G XGMAC2) DMA soft reset.
- *
- * XGMAC2 requires clk_rx_i for any DMA register access.  Without an external
- * PHY supplying this clock the first readl of XGMAC_DMA_MODE causes a
- * synchronous external abort (NOC SLVERR, ESR 0x96001610).
- *
- * The EMAC wrapper's SGMII Tx→Rx loopback routes the internal Tx clock back to
- * satisfy clk_rx_i.  Re-arm the wrapper loopback and FUNC_CLK_EN here in case
- * the EMAC GDSC power-cycled between probe and open, resetting those wrapper
- * registers to POR.
- *
- * Before touching any EMAC DMA register, read back XPCS SR_MII_CTRL via the
- * direct XPCS APB mapping and confirm bit 14 (XPCS Tx→Rx loopback enable) is
- * set.  If it is not, the clock path is still absent and the DMA readl would
- * fault; return -EAGAIN so the caller knows the root cause.
- */
-static int qcom_ethqos_nord_dma_reset(struct stmmac_priv *priv)
+static int qcom_ethqos_pcs_init(struct stmmac_priv *priv)
 {
-	struct qcom_ethqos *ethqos = priv->plat->bsp_priv;
 	struct device *dev = priv->device;
-	void __iomem *ioaddr = priv->ioaddr;
-	u32 value;
+	struct platform_device *xpcs_pdev;
+	struct device_node *np;
+	struct dw_xpcs *xpcs;
 
-	/* pm_runtime_resume_and_get() was called in stmmac_open; GDSC must be on */
-	if (WARN_ON(!pm_runtime_active(dev))) {
-		dev_err(dev, "EMAC GDSC not active; DMA reset skipped\n");
-		return -ENODEV;
-	}
+	np = of_parse_phandle(dev->of_node, "pcs-handle", 0);
+	if (!np)
+		return 0;
 
-	/* Re-arm EMAC wrapper Tx→Rx clock routing in case GDSC reset the registers */
-	qcom_ethqos_set_sgmii_loopback(ethqos, true);
-	ethqos_set_func_clk_en(ethqos);
+	xpcs_pdev = of_find_device_by_node(np);
+	of_node_put(np);
+	if (!xpcs_pdev)
+		return -EPROBE_DEFER;
 
-	/*
-	 * Read SR_MII_CTRL directly at xpcs_base + 0x4000 (physical 0x1A18000).
-	 * Check bit 14 — the raw XPCS loopback enable — before the first DMA read.
-	 */
-	if (ethqos->xpcs_base) {
-		u32 sr_mii_ctrl = readl(ethqos->xpcs_base + QCOM_XPCS_SR_MII_CTRL_OFF);
+	xpcs = platform_get_drvdata(xpcs_pdev);
+	put_device(&xpcs_pdev->dev);
+	if (!xpcs)
+		return -EPROBE_DEFER;
 
-		dev_dbg(dev, "SR_MII_CTRL @ 0x%px = 0x%08x\n",
-			ethqos->xpcs_base + QCOM_XPCS_SR_MII_CTRL_OFF, sr_mii_ctrl);
-		if (!(sr_mii_ctrl & BIT(14))) {
-			dev_err(dev,
-				"XPCS SR_MII_CTRL=0x%08x: bit 14 (loopback) not set; "
-				"aborting DMA reset to avoid NOC fault\n",
-				sr_mii_ctrl);
-			return -EAGAIN;
-		}
-	}
-
-	/* Allow the EMAC wrapper clock path to propagate before DMA access */
-	udelay(50);
-
-	value = readl(ioaddr + XGMAC_DMA_MODE);
-	writel(value | XGMAC_SWR, ioaddr + XGMAC_DMA_MODE);
-
-	return readl_poll_timeout(ioaddr + XGMAC_DMA_MODE, value,
-				  !(value & XGMAC_SWR), 0, 100000);
+	priv->hw->phylink_pcs = xpcs_to_phylink_pcs(xpcs);
+	return 0;
 }
 
 static int qcom_ethqos_probe(struct platform_device *pdev)
@@ -1143,25 +1118,6 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(ethqos->rgmii_base),
 				     "Failed to map rgmii resource\n");
 
-	/*
-	 * Map the XPCS APB window via the pcs-handle phandle so that
-	 * qcom_ethqos_nord_dma_reset can read SR_MII_CTRL (xpcs_base+0x4000)
-	 * directly without going through the MDIO translation stack.
-	 */
-	{
-		struct device_node *xn = of_parse_phandle(dev->of_node, "pcs-handle", 0);
-
-		if (xn) {
-			ethqos->xpcs_base = devm_of_iomap(dev, xn, 0, NULL);
-			of_node_put(xn);
-			if (IS_ERR(ethqos->xpcs_base)) {
-				dev_warn(dev, "failed to map XPCS base: %ld\n",
-					 PTR_ERR(ethqos->xpcs_base));
-				ethqos->xpcs_base = NULL;
-			}
-		}
-	}
-
 	data = of_device_get_match_data(dev);
 	ethqos->rgmii_por = data->rgmii_por;
 	ethqos->num_rgmii_por = data->num_rgmii_por;
@@ -1180,6 +1136,11 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	if (IS_ERR(ethqos->link_clk))
 		return dev_err_probe(dev, PTR_ERR(ethqos->link_clk),
 				     "Failed to get link_clk\n");
+
+	ethqos->eee_clk = devm_clk_get_optional(dev, "eee");
+	if (IS_ERR(ethqos->eee_clk))
+		return dev_err_probe(dev, PTR_ERR(ethqos->eee_clk),
+				     "Failed to get eee clk\n");
 
 	ret = ethqos_clks_config(ethqos, true);
 	if (ret)
@@ -1249,10 +1210,8 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	if (data->dwxgmac_addrs.dma_even_chan_base)
 		plat_dat->dwxgmac_addrs = &data->dwxgmac_addrs;
 	plat_dat->has_hdma = data->has_hdma;
-	if (data->has_hdma) {
+	if (data->has_hdma)
 		qcom_ethqos_hdma_cfg(plat_dat);
-		plat_dat->fix_soc_reset = qcom_ethqos_nord_dma_reset;
-	}
 	if (data->axi_clk_rate)
 		plat_dat->clk_ref_rate = data->axi_clk_rate;
 	plat_dat->pmt = true;
@@ -1274,6 +1233,8 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	/* Enable TSO on queue0 and enable TBS on rest of the queues */
 	for (i = 1; i < plat_dat->tx_queues_to_use; i++)
 		plat_dat->tx_queues_cfg[i].tbs_en = 1;
+
+	plat_dat->pcs_init = qcom_ethqos_pcs_init;
 
 	return devm_stmmac_pltfr_probe(pdev, plat_dat, &stmmac_res);
 }
