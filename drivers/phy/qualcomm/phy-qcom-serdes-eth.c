@@ -472,10 +472,16 @@ static void usxgmii_qref_init(struct device *dev,
 	writel(0x06, tl + TLMM_QREF_PHY_SEL_0);
 	msleep(10);
 
-	dev_dbg(dev, "TCSR BIAS_SEL=0x%x TX0=0x%x RX0=0x%x\n",
-		readl(tc + TCSR_CXO_REFGEN_BIAS_SEL),
-		readl(tc + TCSR_QREFS_CXO0_TX0_CONFIG),
-		readl(tc + TCSR_QREFS_CXO0_RX0_CONFIG));
+	dev_dbg(dev, "TCSR BIAS_SEL=0x%x TX0=0x%x RX0=0x%x RPT0=0x%x\n",
+		 readl(tc + TCSR_CXO_REFGEN_BIAS_SEL),
+		 readl(tc + TCSR_QREFS_CXO0_TX0_CONFIG),
+		 readl(tc + TCSR_QREFS_CXO0_RX0_CONFIG),
+		 readl(tc + TCSR_QREFS_CXO0_RPT0_CONFIG));
+	dev_dbg(dev, "TLMM PHY0 TX_RPT=0x%x RX=0x%x EN=0x%x SEL0=0x%x\n",
+		 readl(tl + TLMM_PHY0_QREF_TX_RPT_SEL),
+		 readl(tl + TLMM_PHY0_QREF_RX_SEL),
+		 readl(tl + TLMM_PHY0_QREF_ENABLE),
+		 readl(tl + TLMM_QREF_PHY_SEL_0));
 }
 
 /* ------------------------------------------------------------------ */
@@ -600,7 +606,7 @@ static int usxgmii_calibrate(struct phy *phy)
 	if (ret)
 		dev_err(dev, "USXGMII SerDes calibration timed out\n");
 	else
-		dev_dbg(dev, "USXGMII SerDes ready\n");
+		dev_info(dev, "USXGMII SerDes ready\n");
 
 	return ret;
 }
