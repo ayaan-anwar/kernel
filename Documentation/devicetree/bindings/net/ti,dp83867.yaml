@@ -31,6 +31,20 @@ properties:
   reg:
     maxItems: 1
 
+  vdda2p5-supply:
+    description: 2.5V analog supply (VDDA2P5 pins).
+
+  vdd1p0-supply:
+    description: 1.0V digital core supply (VDD1P0 pins).
+
+  vdda1p8-supply:
+    description: >
+      1.8V analog supply (VDDA1P8 pins). Only populated when using a
+      three-supply configuration; leave absent for two-supply designs.
+
+  vddio-supply:
+    description: I/O supply (VDDIO pins), 1.8V, 2.5V or 3.3V.
+
   nvmem-cells:
     maxItems: 1
     description:
