@@ -7,7 +7,7 @@
  * offset; instead each MMD is assigned a fixed MMIO base address:
  *
  *   MDIO_MMD_PCS  (devad  3)  SR XS PCS → reg << 2          (base 0x0000)
- *   MDIO_MMD_VEND1 (devad 30) VR XS PCS → 0x2000 + (reg & 0x7fff) << 2
+ *                              VR XS PCS → 0x2000 + (reg & 0x7fff) << 2
  *   MDIO_MMD_VEND2 (devad 31) SR MII    → 0x4000 + reg << 2
  *                              VR MII    → 0x5000 + (reg & 0x7fff) << 2
  *
@@ -38,26 +38,37 @@
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 
+#define QCOM_XPCS_REG_SIZE	0x5100
+
 static ptrdiff_t qcom_xpcs_addr_to_offset(unsigned int addr)
 {
 	int devad = (addr >> 16) & 0x1f;
 	int reg   = addr & 0xffff;
+	ptrdiff_t offset;
 
 	switch (devad) {
-	case MDIO_MMD_PCS:	/* devad 3, SR XS PCS: base 0x0000 */
-		return (ptrdiff_t)(reg << 2);
-
-	case MDIO_MMD_VEND1:	/* devad 30, VR XS PCS: base 0x2000 */
-		return (ptrdiff_t)(0x2000 + ((reg & 0x7fff) << 2));
-
-	case MDIO_MMD_VEND2:	/* devad 31, SR MII (0x4000) or VR MII (0x5000) */
+	case MDIO_MMD_PCS:
 		if (reg & BIT(15))
-			return (ptrdiff_t)(0x5000 + ((reg & 0x7fff) << 2));
-		return (ptrdiff_t)(0x4000 + (reg << 2));
+			offset = 0x2000 + ((reg & 0x7fff) << 2);
+		else
+			offset = reg << 2;
+		break;
+
+	case MDIO_MMD_VEND2:
+		if (reg & BIT(15))
+			offset = 0x5000 + ((reg & 0x7fff) << 2);
+		else
+			offset = 0x4000 + (reg << 2);
+		break;
 
 	default:
-		return -1;
+		return -EINVAL;
 	}
+
+	if (offset < 0 || offset >= QCOM_XPCS_REG_SIZE)
+		return -ERANGE;
+
+	return offset;
 }
 
 static int qcom_xpcs_reg_read(void *ctx, unsigned int addr, unsigned int *val)
@@ -85,6 +96,11 @@ static int qcom_xpcs_reg_read(void *ctx, unsigned int addr, unsigned int *val)
 
 	off = qcom_xpcs_addr_to_offset(addr);
 	if (off < 0) {
+		/* -EINVAL: unsupported MMD (e.g. PMA/PMD probed by xpcs_read_ids).
+		 * -ERANGE: translated offset outside the 0x5100 window — real bug. */
+		if (off != -EINVAL)
+			pr_err_ratelimited("%s: invalid addr=0x%08x (%pe)\n",
+					   __func__, addr, ERR_PTR(off));
 		*val = 0xffff;
 		return 0;
 	}
@@ -118,19 +134,28 @@ static int qcom_xpcs_probe(struct platform_device *pdev)
 	void __iomem *base;
 	struct regmap *regmap;
 	struct dw_xpcs *xpcs;
+	struct clk *clk;
 
 	base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
-	/* APB clock must be enabled before any register access */
-	{
-		struct clk *apb = devm_clk_get_optional_enabled(dev, "apb");
+	/* APB must be up before any register access. */
+	clk = devm_clk_get_optional_enabled(dev, "apb");
+	if (IS_ERR(clk))
+		return dev_err_probe(dev, PTR_ERR(clk),
+				     "failed to enable apb clock\n");
 
-		if (IS_ERR(apb))
-			return dev_err_probe(dev, PTR_ERR(apb),
-					     "failed to enable apb clock\n");
-	}
+	/* RPCS Rx/Tx feed the PCS data path. */
+	clk = devm_clk_get_optional_enabled(dev, "rpcs-rx");
+	if (IS_ERR(clk))
+		return dev_err_probe(dev, PTR_ERR(clk),
+				     "failed to enable rpcs-rx clock\n");
+
+	clk = devm_clk_get_optional_enabled(dev, "rpcs-tx");
+	if (IS_ERR(clk))
+		return dev_err_probe(dev, PTR_ERR(clk),
+				     "failed to enable rpcs-tx clock\n");
 
 	regmap = devm_regmap_init(dev, NULL, base, &qcom_xpcs_regmap_cfg);
 	if (IS_ERR(regmap))
@@ -145,6 +170,7 @@ static int qcom_xpcs_probe(struct platform_device *pdev)
 				     "failed to register XPCS\n");
 
 	platform_set_drvdata(pdev, xpcs);
+	dev_info(dev, "registered Qualcomm Nord XPCS\n");
 	return 0;
 }
 
