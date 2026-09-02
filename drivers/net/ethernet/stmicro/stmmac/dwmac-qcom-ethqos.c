@@ -756,9 +756,12 @@ static int ethqos_configure_usxgmii(struct qcom_ethqos *ethqos)
 		return -EINVAL;
 	}
 
-	/* Re-enable USXGMII clock block */
-	rgmii_updatel(ethqos, USXGMII_CLK_BLK_CLK_EN, USXGMII_CLK_BLK_CLK_EN,
-		      EMAC_WRAPPER_USXGMII_MUX_SEL);
+	/* Re-enable USXGMII clock block.  At 10G the SerDes supplies the clock
+	 * through the GMII_CLK_BLK_SEL path (set above); CLK_EN is not needed
+	 * once TCSR reference clocks are programmed by the PHY driver. */
+	if (ethqos->speed != SPEED_10000)
+		rgmii_updatel(ethqos, USXGMII_CLK_BLK_CLK_EN, USXGMII_CLK_BLK_CLK_EN,
+			      EMAC_WRAPPER_USXGMII_MUX_SEL);
 
 	return 0;
 }
@@ -1088,6 +1091,7 @@ static int qcom_ethqos_pcs_init(struct stmmac_priv *priv)
 	if (!np)
 		return 0;
 
+	dev_info(dev, "found pcs-handle %pOF\n", np);
 	xpcs_pdev = of_find_device_by_node(np);
 	of_node_put(np);
 	if (!xpcs_pdev)
@@ -1099,7 +1103,31 @@ static int qcom_ethqos_pcs_init(struct stmmac_priv *priv)
 		return -EPROBE_DEFER;
 
 	priv->hw->phylink_pcs = xpcs_to_phylink_pcs(xpcs);
+	dev_info(dev, "registered phylink PCS from pcs-handle\n");
 	return 0;
+}
+
+static struct phylink_pcs *qcom_ethqos_select_pcs(struct stmmac_priv *priv,
+						  phy_interface_t interface)
+{
+	struct device *dev = priv->device;
+	struct phylink_pcs *pcs = priv->hw->phylink_pcs;
+
+	if (!pcs) {
+		dev_info(dev, "select_pcs: no XPCS registered for %s\n",
+			 phy_modes(interface));
+		return ERR_PTR(-ENODEV);
+	}
+
+	if (!test_bit(interface, pcs->supported_interfaces)) {
+		dev_info(dev, "select_pcs: XPCS does not support %s\n",
+			 phy_modes(interface));
+		return ERR_PTR(-EOPNOTSUPP);
+	}
+
+	dev_dbg(dev, "select_pcs: selected XPCS for %s\n", phy_modes(interface));
+
+	return pcs;
 }
 
 static int qcom_ethqos_probe(struct platform_device *pdev)
@@ -1275,6 +1303,7 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		plat_dat->tx_queues_cfg[i].tbs_en = 1;
 
 	plat_dat->pcs_init = qcom_ethqos_pcs_init;
+	plat_dat->select_pcs = qcom_ethqos_select_pcs;
 
 	return devm_stmmac_pltfr_probe(pdev, plat_dat, &stmmac_res);
 }
