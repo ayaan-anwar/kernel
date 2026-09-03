@@ -756,13 +756,6 @@ static int ethqos_configure_usxgmii(struct qcom_ethqos *ethqos)
 		return -EINVAL;
 	}
 
-	/* Re-enable USXGMII clock block.  At 10G the SerDes supplies the clock
-	 * through the GMII_CLK_BLK_SEL path (set above); CLK_EN is not needed
-	 * once TCSR reference clocks are programmed by the PHY driver. */
-	if (ethqos->speed != SPEED_10000)
-		rgmii_updatel(ethqos, USXGMII_CLK_BLK_CLK_EN, USXGMII_CLK_BLK_CLK_EN,
-			      EMAC_WRAPPER_USXGMII_MUX_SEL);
-
 	return 0;
 }
 
