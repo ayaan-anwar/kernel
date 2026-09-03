@@ -176,6 +176,11 @@ xpcs_find_compat(struct dw_xpcs *xpcs, phy_interface_t interface)
 	return NULL;
 }
 
+static bool xpcs_is_qcom(struct dw_xpcs *xpcs)
+{
+	return xpcs->desc && xpcs->desc->id == QCOM_XPCS_ID;
+}
+
 struct phylink_pcs *xpcs_to_phylink_pcs(struct dw_xpcs *xpcs)
 {
 	return &xpcs->pcs;
@@ -1581,6 +1586,19 @@ static const struct dw_xpcs_compat nxp_sja1110_xpcs_compat[] = {
 	}
 };
 
+static const struct dw_xpcs_compat qcom_xpcs_compat[] = {
+	{
+		.interface = PHY_INTERFACE_MODE_USXGMII,
+		.supported = xpcs_usxgmii_features,
+		.an_mode = DW_AN_C37_USXGMII,
+	}, {
+		.interface = PHY_INTERFACE_MODE_10GBASER,
+		.supported = xpcs_10gbaser_features,
+		.an_mode = DW_10GBASER,
+	}, {
+	}
+};
+
 static const struct dw_xpcs_desc xpcs_desc_list[] = {
 	{
 		.id = DW_XPCS_ID,
@@ -1594,6 +1612,10 @@ static const struct dw_xpcs_desc xpcs_desc_list[] = {
 		.id = NXP_SJA1110_XPCS_ID,
 		.mask = DW_XPCS_ID_MASK,
 		.compat = nxp_sja1110_xpcs_compat,
+	}, {
+		.id = QCOM_XPCS_ID,
+		.mask = QCOM_XPCS_ID_MASK,
+		.compat = qcom_xpcs_compat,
 	},
 };
 
@@ -1718,7 +1740,8 @@ static struct dw_xpcs *xpcs_create(struct mdio_device *mdiodev)
 	if (xpcs->info.pma == WX_TXGBE_XPCS_PMA_10G_ID ||
 	    xpcs->info.pma == MP_FBNIC_XPCS_PMA_100G_ID)
 		xpcs->pcs.poll = false;
-	else
+	else if (!xpcs_is_qcom(xpcs))
+		/* Reset on link-up causes RBU on Qualcomm XPCS hardware */
 		xpcs->need_reset = true;
 
 	return xpcs;
