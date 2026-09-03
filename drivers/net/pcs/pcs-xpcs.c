@@ -361,23 +361,6 @@ static int xpcs_read_fault_c73(struct dw_xpcs *xpcs,
 	return 0;
 }
 
-static int xpcs_pre_init(struct phylink_pcs *pcs)
-{
-	struct dw_xpcs *xpcs = phylink_pcs_to_xpcs(pcs);
-
-	if (!xpcs_is_qcom_nord(xpcs))
-		return 0;
-
-	/* Set USXG_EN early so the XPCS is in USXGMII mode before
-	 * stmmac_hw_setup() runs.  DW_LBE loopback is NOT used: the SerDes
-	 * is already calibrated by the PHY driver before stmmac probes, and
-	 * CLK_EN=1 in USXGMII_MUX_SEL provides the clock path.  Enabling
-	 * DW_LBE would loop TX frames back to RX during init, exhausting
-	 * the Rx descriptor ring and leaving the DMA in RBU state. */
-	return xpcs_modify_vpcs(xpcs, DW_VR_XS_PCS_DIG_CTRL1,
-				DW_USXGMII_EN, DW_USXGMII_EN);
-}
-
 static void xpcs_link_up_usxgmii(struct dw_xpcs *xpcs, int speed)
 {
 	int ret, val, speed_sel;
@@ -418,34 +401,6 @@ static void xpcs_link_up_usxgmii(struct dw_xpcs *xpcs, int speed)
 	/* Step 15: wait for XGMII clocks to stabilise */
 	usleep_range(1, 5);
 
-	if (xpcs_is_qcom_nord(xpcs)) {
-		/* Downstream sequence: soft-reset VR_XS_PCS_DIG_CTRL1 (BIT15)
-		 * to flush PCS state machine before triggering USXGMII reset. */
-		ret = xpcs_modify_vpcs(xpcs, DW_VR_XS_PCS_DIG_CTRL1,
-				       DW_VR_RST, DW_VR_RST);
-		if (ret < 0)
-			goto out;
-		ret = read_poll_timeout(xpcs_read_vpcs, val,
-					val < 0 || !(val & DW_VR_RST),
-					1000, 32000, true,
-					xpcs, DW_VR_XS_PCS_DIG_CTRL1);
-		if (ret < 0 || val < 0)
-			goto out;
-
-		/* Soft-reset VR_MII_DIG_CTRL1 (VEND2 vendor reg 0, BIT15)
-		 * to flush MII layer before USXGMII adapter reset. */
-		ret = xpcs_modify(xpcs, MDIO_MMD_VEND2, DW_VR_MII_DIG_CTRL1,
-				  DW_VR_RST, DW_VR_RST);
-		if (ret < 0)
-			goto out;
-		ret = read_poll_timeout(xpcs_read, val,
-					val < 0 || !(val & DW_VR_RST),
-					1000, 32000, true,
-					xpcs, MDIO_MMD_VEND2, DW_VR_MII_DIG_CTRL1);
-		if (ret < 0 || val < 0)
-			goto out;
-	}
-
 	/* Step 16: assert USRA_RST then poll until it self-clears */
 	ret = xpcs_modify_vpcs(xpcs, MDIO_CTRL1, DW_USXGMII_RST,
 			       DW_USXGMII_RST);
@@ -458,38 +413,6 @@ static void xpcs_link_up_usxgmii(struct dw_xpcs *xpcs, int speed)
 				xpcs, MDIO_CTRL1);
 	if (ret < 0 || val < 0)
 		goto out;
-
-	if (xpcs_is_qcom_nord(xpcs)) {
-		/* Poll SR_MII_STS (VEND2 std reg 1) for link status.
-		 * Register is latch-low: dummy read first to clear the latch. */
-		xpcs_read(xpcs, MDIO_MMD_VEND2, MII_BMSR);
-		ret = read_poll_timeout(xpcs_read, val,
-					val < 0 || (val & BMSR_LSTATUS),
-					1000, 500000, true,
-					xpcs, MDIO_MMD_VEND2, MII_BMSR);
-		if (ret < 0 || val < 0) {
-			dev_warn(&xpcs->mdiodev->dev,
-				 "%s: SR_MII_STS LSTATUS not set (val=0x%04x ret=%d)\n",
-				 __func__, val < 0 ? 0xffff : (unsigned)val, ret);
-			goto out;
-		}
-
-		/* Poll SR_XS_PCS_STS1 (PCS std reg 1) for remote link status. */
-		xpcs_read(xpcs, MDIO_MMD_PCS, MDIO_STAT1);
-		ret = read_poll_timeout(xpcs_read, val,
-					val < 0 || (val & MDIO_STAT1_LSTATUS),
-					1000, 500000, true,
-					xpcs, MDIO_MMD_PCS, MDIO_STAT1);
-		if (ret < 0 || val < 0) {
-			dev_warn(&xpcs->mdiodev->dev,
-				 "%s: SR_XS_PCS_STS1 LSTATUS not set (val=0x%04x ret=%d)\n",
-				 __func__, val < 0 ? 0xffff : (unsigned)val, ret);
-			goto out;
-		}
-
-		dev_dbg(&xpcs->mdiodev->dev,
-			 "%s: SR_MII_STS and SR_XS_PCS_STS1 link up\n", __func__);
-	}
 
 	return;
 
@@ -1712,7 +1635,6 @@ static const struct phylink_pcs_ops xpcs_phylink_ops = {
 	.pcs_validate = xpcs_validate,
 	.pcs_inband_caps = xpcs_inband_caps,
 	.pcs_pre_config = xpcs_pre_config,
-	.pcs_pre_init = xpcs_pre_init,
 	.pcs_config = xpcs_config,
 	.pcs_get_state = xpcs_get_state,
 	.pcs_an_restart = xpcs_an_restart,
