@@ -146,17 +146,6 @@ static int qcom_xpcs_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(clk),
 				     "failed to enable apb clock\n");
 
-	/* RPCS Rx/Tx feed the PCS data path. */
-	clk = devm_clk_get_optional_enabled(dev, "rpcs-rx");
-	if (IS_ERR(clk))
-		return dev_err_probe(dev, PTR_ERR(clk),
-				     "failed to enable rpcs-rx clock\n");
-
-	clk = devm_clk_get_optional_enabled(dev, "rpcs-tx");
-	if (IS_ERR(clk))
-		return dev_err_probe(dev, PTR_ERR(clk),
-				     "failed to enable rpcs-tx clock\n");
-
 	regmap = devm_regmap_init(dev, NULL, base, &qcom_xpcs_regmap_cfg);
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
