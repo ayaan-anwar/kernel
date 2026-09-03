@@ -288,6 +288,7 @@ static int xpcs_soft_reset(struct dw_xpcs *xpcs,
 	case DW_AN_C37_SGMII:
 	case DW_2500BASEX:
 	case DW_AN_C37_1000BASEX:
+	case DW_AN_C37_USXGMII:
 		dev = MDIO_MMD_VEND2;
 		break;
 	default:
@@ -351,6 +352,95 @@ static int xpcs_read_fault_c73(struct dw_xpcs *xpcs,
 		xpcs_warn(xpcs, state, "Link has errors!\n");
 		return -EFAULT;
 	}
+
+	return 0;
+}
+
+static int xpcs_config_aneg_c37_usxgmii(struct dw_xpcs *xpcs,
+					 unsigned int neg_mode)
+{
+	int ret;
+
+	/* DW XPCS databook §7.11 "Switching to USXGMII Mode" steps 1–10. */
+
+	/* Step 1: SR_XS_PCS_CTRL2 PCS type = BASE-R */
+	ret = xpcs_modify(xpcs, MDIO_MMD_PCS, MDIO_CTRL2,
+			  MDIO_PCS_CTRL2_TYPE, MDIO_PCS_CTRL2_10GBR);
+	if (ret < 0)
+		return ret;
+
+	/* Step 2: VR_XS_PCS_DIG_CTRL1 USXG_EN = 1 */
+	ret = xpcs_modify_vpcs(xpcs, DW_VR_XS_PCS_DIG_CTRL1,
+			       DW_USXGMII_EN, DW_USXGMII_EN);
+	if (ret < 0)
+		return ret;
+
+	/* Step 3: VR_XS_PCS_KR_CTRL USXG_MODE = 0 (single-port 10G) */
+	ret = xpcs_write_vpcs(xpcs, DW_VR_XS_PCS_KR_CTRL,
+			      FIELD_PREP(DW_USXG_MODE_SEL, 0));
+	if (ret < 0)
+		return ret;
+
+	/* Step 7: VR_MII_AN_CTRL — TX_CONFIG = PHY-side, SGMII_LINK_STS.
+	 * PCS_MODE stays 0 (1000BASE-X/USXGMII), no AN_INTR_EN needed in
+	 * poll mode.  Value confirmed against working downstream register dump.
+	 */
+	ret = xpcs_modify(xpcs, MDIO_MMD_VEND2, DW_VR_MII_AN_CTRL,
+			  BMCR_ANENABLE, 0);
+	if (ret < 0)
+		return ret;
+
+	ret = xpcs_write(xpcs, MDIO_MMD_VEND2, DW_VR_MII_AN_CTRL,
+			 FIELD_PREP(DW_VR_MII_TX_CONFIG_MASK,
+				    DW_VR_MII_TX_CONFIG_PHY_SIDE_SGMII) |
+			 DW_VR_MII_SGMII_LINK_STS);
+	if (ret < 0)
+		return ret;
+
+	/* Step 10: CL37 AN is always active in USXGMII; it is a framing
+	 * requirement, not a user-visible autonegotiation.
+	 */
+	return xpcs_modify(xpcs, MDIO_MMD_VEND2, MII_BMCR,
+			   BMCR_ANENABLE, BMCR_ANENABLE);
+}
+
+static int xpcs_get_state_c37_usxgmii(struct dw_xpcs *xpcs,
+				       struct phylink_link_state *state)
+{
+	int ret;
+	u16 sp;
+
+	ret = xpcs_read(xpcs, MDIO_MMD_VEND2, DW_VR_MII_AN_INTR_STS);
+	if (ret < 0)
+		return ret;
+
+	state->link = !!(ret & DW_VR_MII_USXG_ANSGM_SP_LNKSTS);
+
+	sp = FIELD_GET(DW_VR_MII_USXG_ANSGM_SP, ret);
+	switch (sp) {
+	case DW_VR_MII_USXG_SP_10:
+		state->speed = SPEED_10;
+		break;
+	case DW_VR_MII_USXG_SP_100:
+		state->speed = SPEED_100;
+		break;
+	case DW_VR_MII_USXG_SP_1000:
+		state->speed = SPEED_1000;
+		break;
+	case DW_VR_MII_USXG_SP_10G:
+		state->speed = SPEED_10000;
+		break;
+	case DW_VR_MII_USXG_SP_2P5G:
+		state->speed = SPEED_2500;
+		break;
+	case DW_VR_MII_USXG_SP_5G:
+		state->speed = SPEED_5000;
+		break;
+	default:
+		state->link = false;
+		return 0;
+	}
+	state->duplex = DUPLEX_FULL;
 
 	return 0;
 }
@@ -689,6 +779,10 @@ static unsigned int xpcs_inband_caps(struct phylink_pcs *pcs,
 	case DW_2500BASEX:
 		return LINK_INBAND_DISABLE;
 
+	case DW_AN_C37_USXGMII:
+		/* CL37 AN is always active in USXGMII; not user-visible */
+		return LINK_INBAND_DISABLE;
+
 	default:
 		return 0;
 	}
@@ -950,6 +1044,11 @@ static int xpcs_do_config(struct dw_xpcs *xpcs, phy_interface_t interface,
 		if (ret)
 			return ret;
 		break;
+	case DW_AN_C37_USXGMII:
+		ret = xpcs_config_aneg_c37_usxgmii(xpcs, neg_mode);
+		if (ret)
+			return ret;
+		break;
 	case DW_2500BASEX:
 		ret = xpcs_config_2500basex(xpcs);
 		if (ret)
@@ -1208,6 +1307,12 @@ static void xpcs_get_state(struct phylink_pcs *pcs, unsigned int neg_mode,
 		if (ret)
 			dev_err(&xpcs->mdiodev->dev, "%s returned %pe\n",
 				"xpcs_get_state_c37_1000basex", ERR_PTR(ret));
+		break;
+	case DW_AN_C37_USXGMII:
+		ret = xpcs_get_state_c37_usxgmii(xpcs, state);
+		if (ret)
+			dev_err(&xpcs->mdiodev->dev, "%s returned %pe\n",
+				"xpcs_get_state_c37_usxgmii", ERR_PTR(ret));
 		break;
 	case DW_2500BASEX:
 		ret = xpcs_get_state_2500basex(xpcs, state);
