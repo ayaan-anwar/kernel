@@ -352,7 +352,7 @@ static int stmmac_ethtool_get_regs_len(struct net_device *dev)
 	struct stmmac_priv *priv = netdev_priv(dev);
 
 	if (priv->plat->core_type == DWMAC_CORE_XGMAC)
-		return XGMAC_REGSIZE * 4;
+		return XGMAC_REGSIZE(priv->plat->dwxgmac_addrs) * 4;
 	else if (priv->plat->core_type == DWMAC_CORE_GMAC4)
 		return GMAC4_REG_SPACE_SIZE;
 	return REG_SPACE_SIZE;
@@ -759,6 +759,9 @@ static u32 stmmac_usec2riwt(u32 usec, struct stmmac_priv *priv)
 			return 0;
 	}
 
+	/* Receive Interrupt Watchdog Timer (riwt) has a resolution of 256
+	 * ticks.
+	 */
 	return (usec * (clk / 1000000)) / 256;
 }
 

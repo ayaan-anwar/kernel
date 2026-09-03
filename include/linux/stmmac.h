@@ -124,6 +124,34 @@ struct stmmac_dma_cfg {
 	bool multi_msi_en;
 	/* atds: stmmac core internal */
 	bool atds;
+	/* 25G HDMA AXI outstanding request limits.
+	 * orrq: outstanding read requests per TX PDMA channel (ORRQ field)
+	 * owrq: outstanding write requests per RX PDMA channel (OWRQ field)
+	 * Valid range 0-63; 0 means leave hardware default.
+	 */
+	int orrq;
+	int owrq;
+	/* 25G HDMA per-channel descriptor cache and prefetch thresholds.
+	 * tdps/rdps: TX/RX descriptor prefetch threshold size (encoded value)
+	 * txdcsz/rxdcsz: TX/RX descriptor cache size (encoded value)
+	 * See XXVGMAC_TDPS_* / XXVGMAC_TXDCSZ_* constants in dw25gmac.h.
+	 */
+	u32 tdps;
+	u32 rdps;
+	u32 txdcsz;
+	u32 rxdcsz;
+	/* DW25GMAC HDMA: optional non-1:1 VDMA→TC / VDMA→PDMA channel maps.
+	 * NULL = default 1:1 (tc == chan).  Length must equal total_tx/rx_vdma.
+	 * tx_vdma_tc_map[n]   = TC index that TX VDMA n is assigned to.
+	 * tx_vdma_pdma_map[n] = PDMA index that TX VDMA n is routed through.
+	 * total_tx/rx_vdma    = all VDMAs including offline ones.
+	 */
+	const u8 *tx_vdma_tc_map;
+	const u8 *rx_vdma_tc_map;
+	const u8 *tx_vdma_pdma_map;
+	const u8 *rx_vdma_pdma_map;
+	u32 total_tx_vdma;
+	u32 total_rx_vdma;
 };
 
 #define AXI_BLEN	7
@@ -188,6 +216,18 @@ struct dwmac4_addrs {
 	u32 mtl_low_cred_offset;
 };
 
+/* Address layout for the Broadcom XXVGMAC (25G/10G) DMA */
+struct dwxgmac_addrs {
+	u32 dma_even_chan_base;
+	u32 dma_odd_chan_base;
+	u32 dma_chan_offset;
+	u32 mtl_chan_base;
+	u32 mtl_chan_offset;
+	u32 timestamp_base;
+	u32 pps_base;
+	u32 pps_offset;
+};
+
 enum dwmac_core_type {
 	DWMAC_CORE_MAC100,
 	DWMAC_CORE_GMAC,
@@ -215,6 +255,8 @@ enum dwmac_core_type {
 struct mac_device_info;
 
 struct plat_stmmacenet_data {
+	u32 snps_id;
+	u32 dev_id;
 	enum dwmac_core_type core_type;
 	int bus_id;
 	int phy_addr;
@@ -356,6 +398,8 @@ struct plat_stmmacenet_data {
 	int msi_rx_base_vec;
 	int msi_tx_base_vec;
 	const struct dwmac4_addrs *dwmac4_addrs;
+	const struct dwxgmac_addrs *dwxgmac_addrs;
+	bool has_hdma;
 	unsigned int flags;
 	struct stmmac_dma_cfg __dma_cfg;
 };
