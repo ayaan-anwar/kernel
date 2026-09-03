@@ -4,9 +4,11 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_net.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/phy.h>
 #include <linux/phy/phy.h>
+#include <linux/pcs/pcs-xpcs.h>
 
 #include "stmmac.h"
 #include "stmmac_platform.h"
@@ -21,7 +23,14 @@
 #define RGMII_IO_MACRO_CONFIG2		0x1C
 #define RGMII_IO_MACRO_DEBUG1		0x20
 #define EMAC_SYSTEM_LOW_POWER_DEBUG	0x28
+#define RGMII_IO_MACRO_SCRATCH_2	0x24
 #define EMAC_WRAPPER_SGMII_PHY_CNTRL1	0xf4
+
+/* IO macro generation 4 (USXGMII / 10GBaseR) */
+#define RGMII_IO_MACRO_BYPASS			0x16C
+#define EMAC_WRAPPER_SGMII_PHY_CNTRL0		0x170
+#define EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4	0x174
+#define EMAC_WRAPPER_USXGMII_MUX_SEL		0x1D0
 
 /* RGMII_IO_MACRO_CONFIG fields */
 #define RGMII_CONFIG_FUNC_CLK_EN		BIT(30)
@@ -78,6 +87,21 @@
 #define RGMII_CONFIG2_RX_PROG_SWAP		BIT(7)
 #define RGMII_CONFIG2_DATA_DIVIDE_CLK_SEL	BIT(6)
 #define RGMII_CONFIG2_TX_CLK_PHASE_SHIFT_EN	BIT(5)
+#define RGMII_CONFIG2_MODE_EN_VIA_GMII		BIT(21)
+
+/* EMAC_WRAPPER_SGMII_PHY_CNTRL0 fields */
+#define SGMII_PHY_CNTRL0_2P5G_1G_CLK_SEL	GENMASK(6, 5)
+
+/* EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4 fields */
+#define SGMII_PHY_CNTRL1_USXGMII_GMII_MASTER_CLK_MUX_SEL	BIT(4)
+#define SGMII_PHY_CNTRL1_RGMII_SGMII_CLK_MUX_SEL		BIT(0)
+
+/* RGMII_IO_MACRO_BYPASS fields */
+#define RGMII_BYPASS_EN				BIT(0)
+
+/* EMAC_WRAPPER_USXGMII_MUX_SEL fields */
+#define USXGMII_CLK_BLK_GMII_CLK_BLK_SEL	BIT(1)
+#define USXGMII_CLK_BLK_CLK_EN			BIT(0)
 
 /* EMAC_WRAPPER_SGMII_PHY_CNTRL1 bits */
 #define SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN	BIT(3)
@@ -101,12 +125,22 @@ struct ethqos_emac_driver_data {
 	unsigned int num_rgmii_por;
 	bool rgmii_config_loopback_en;
 	bool has_emac_ge_3;
+	bool has_io_macro_ge_4;
+	bool has_hdma;
 	u8 dma_addr_width;
 	const char *link_clk_name;
 	struct dwmac4_addrs dwmac4_addrs;
+	struct dwxgmac_addrs dwxgmac_addrs;
 	bool needs_sgmii_loopback;
 	const struct ethqos_noc_clk_cfg *noc_clk_cfg;
 	unsigned int num_noc_clks;
+	unsigned long axi_clk_rate;
+	/* DW25GMAC HDMA: VDMA->TC and VDMA->PDMA maps (NULL = 1:1 default) */
+	const u8 *tx_vdma_tc_map;
+	const u8 *rx_vdma_tc_map;
+	const u8 *tx_vdma_pdma_map;
+	const u8 *rx_vdma_pdma_map;
+	u32 total_vdma;   /* total VDMA channels including offline */
 };
 
 struct qcom_ethqos {
@@ -120,10 +154,11 @@ struct qcom_ethqos {
 	unsigned int num_rgmii_por;
 	bool rgmii_config_loopback_en;
 	bool has_emac_ge_3;
+	bool has_io_macro_ge_4;
 	bool needs_sgmii_loopback;
-
 	struct clk_bulk_data noc_clks[ETHQOS_MAX_NOC_CLKS];
 	int num_noc_clks;
+	int speed;
 };
 
 static u32 rgmii_readl(struct qcom_ethqos *ethqos, unsigned int offset)
@@ -212,14 +247,18 @@ static int ethqos_set_clk_tx_rate(void *bsp_priv, struct clk *clk_tx_i,
 static void
 qcom_ethqos_set_sgmii_loopback(struct qcom_ethqos *ethqos, bool enable)
 {
-	if (!ethqos->needs_sgmii_loopback ||
-	    ethqos->phy_mode != PHY_INTERFACE_MODE_2500BASEX)
+	u32 val = enable ? SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN : 0;
+	unsigned int reg;
+
+	if (!ethqos->needs_sgmii_loopback)
 		return;
 
-	rgmii_updatel(ethqos,
-		      SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN,
-		      enable ? SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN : 0,
-		      EMAC_WRAPPER_SGMII_PHY_CNTRL1);
+	/* io_macro_ge_4 uses SGMII_PHY_CNTRL1_V4 (0x174) instead of 0xf4 */
+	reg = ethqos->has_io_macro_ge_4 ?
+	      EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4 : EMAC_WRAPPER_SGMII_PHY_CNTRL1;
+
+	rgmii_updatel(ethqos, SGMII_PHY_CNTRL1_SGMII_TX_TO_RX_LOOPBACK_EN,
+		      val, reg);
 }
 
 static void ethqos_set_func_clk_en(struct qcom_ethqos *ethqos)
@@ -561,6 +600,56 @@ static void ethqos_rgmii_id_macro_init(struct qcom_ethqos *ethqos, int speed)
 	rgmii_setmask(ethqos, RGMII_CONFIG2_RX_PROG_SWAP, RGMII_IO_MACRO_CONFIG2);
 }
 
+static int ethqos_configure_usxgmii(struct qcom_ethqos *ethqos)
+{
+	struct device *dev = &ethqos->pdev->dev;
+	unsigned int i;
+
+	for (i = 0; i < ethqos->num_rgmii_por; i++)
+		rgmii_writel(ethqos, ethqos->rgmii_por[i].value,
+			     ethqos->rgmii_por[i].offset);
+
+	ethqos_set_func_clk_en(ethqos);
+
+	rgmii_updatel(ethqos, RGMII_BYPASS_EN, RGMII_BYPASS_EN,
+		      RGMII_IO_MACRO_BYPASS);
+	rgmii_updatel(ethqos, RGMII_CONFIG2_MODE_EN_VIA_GMII, 0,
+		      RGMII_IO_MACRO_CONFIG2);
+	rgmii_updatel(ethqos, SGMII_PHY_CNTRL0_2P5G_1G_CLK_SEL, BIT(5),
+		      EMAC_WRAPPER_SGMII_PHY_CNTRL0);
+	rgmii_updatel(ethqos, SGMII_PHY_CNTRL1_RGMII_SGMII_CLK_MUX_SEL, 0,
+		      EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4);
+	rgmii_updatel(ethqos, SGMII_PHY_CNTRL1_USXGMII_GMII_MASTER_CLK_MUX_SEL,
+		      SGMII_PHY_CNTRL1_USXGMII_GMII_MASTER_CLK_MUX_SEL,
+		      EMAC_WRAPPER_SGMII_PHY_CNTRL1_V4);
+
+	rgmii_updatel(ethqos, USXGMII_CLK_BLK_GMII_CLK_BLK_SEL, 0,
+		      EMAC_WRAPPER_USXGMII_MUX_SEL);
+	rgmii_updatel(ethqos, USXGMII_CLK_BLK_CLK_EN, 0,
+		      EMAC_WRAPPER_USXGMII_MUX_SEL);
+
+	if (ethqos->speed != SPEED_10000) {
+		dev_err(dev, "unsupported USXGMII speed %d\n", ethqos->speed);
+		return -EINVAL;
+	}
+
+	rgmii_updatel(ethqos, USXGMII_CLK_BLK_GMII_CLK_BLK_SEL,
+		      USXGMII_CLK_BLK_GMII_CLK_BLK_SEL,
+		      EMAC_WRAPPER_USXGMII_MUX_SEL);
+
+	return 0;
+}
+
+static void ethqos_fix_mac_speed_usxgmii(void *bsp_priv,
+					  phy_interface_t interface, int speed,
+					  unsigned int mode)
+{
+	struct qcom_ethqos *ethqos = bsp_priv;
+
+	ethqos->speed = speed;
+	ethqos_configure_usxgmii(ethqos);
+}
+
 static void ethqos_fix_mac_speed_rgmii(void *bsp_priv,
 				       phy_interface_t interface, int speed,
 				       unsigned int mode)
@@ -819,6 +908,72 @@ static int qcom_ethqos_init_noc_clks(struct qcom_ethqos *ethqos,
 	return 0;
 }
 
+static void qcom_ethqos_hdma_cfg(struct plat_stmmacenet_data *plat,
+				 const struct ethqos_emac_driver_data *data)
+{
+	/* 25G HDMA AXI bus parameters for SA8797P.
+	 * orrq/owrq: maximise outstanding AXI read/write requests (up to 63).
+	 * txdcsz/rxdcsz: descriptor cache size (encoded per XXVGMAC_TXDCSZ_*).
+	 * tdps/rdps: descriptor prefetch threshold (encoded per XXVGMAC_TDPS_*).
+	 */
+	plat->dma_cfg->orrq = 15;
+	plat->dma_cfg->owrq = 15;
+	plat->dma_cfg->txdcsz = 4;
+	plat->dma_cfg->tdps = 1;
+	plat->dma_cfg->rxdcsz = 4;
+	plat->dma_cfg->rdps = 1;
+
+	/* VDMA->TC / VDMA->PDMA channel maps (Nord-specific; NULL = 1:1 default) */
+	if (data->tx_vdma_tc_map) {
+		plat->dma_cfg->tx_vdma_tc_map   = data->tx_vdma_tc_map;
+		plat->dma_cfg->rx_vdma_tc_map   = data->rx_vdma_tc_map;
+		plat->dma_cfg->tx_vdma_pdma_map = data->tx_vdma_pdma_map;
+		plat->dma_cfg->rx_vdma_pdma_map = data->rx_vdma_pdma_map;
+		plat->dma_cfg->total_tx_vdma    = data->total_vdma;
+		plat->dma_cfg->total_rx_vdma    = data->total_vdma;
+	}
+}
+
+static int qcom_ethqos_pcs_init(struct stmmac_priv *priv)
+{
+	struct device *dev = priv->device;
+	struct platform_device *xpcs_pdev;
+	struct device_node *np;
+	struct dw_xpcs *xpcs;
+
+	np = of_parse_phandle(dev->of_node, "pcs-handle", 0);
+	if (!np)
+		return 0;
+
+	xpcs_pdev = of_find_device_by_node(np);
+	of_node_put(np);
+	if (!xpcs_pdev)
+		return -EPROBE_DEFER;
+
+	xpcs = platform_get_drvdata(xpcs_pdev);
+	put_device(&xpcs_pdev->dev);
+	if (!xpcs)
+		return -EPROBE_DEFER;
+
+	priv->hw->phylink_pcs = xpcs_to_phylink_pcs(xpcs);
+	return 0;
+}
+
+static struct phylink_pcs *qcom_ethqos_select_pcs(struct stmmac_priv *priv,
+						   phy_interface_t interface)
+{
+	struct phylink_pcs *pcs = priv->hw->phylink_pcs;
+
+	if (!pcs)
+		return ERR_PTR(-ENODEV);
+
+	if (!test_bit(interface, pcs->supported_interfaces))
+		return ERR_PTR(-EOPNOTSUPP);
+
+	return pcs;
+}
+
+
 static int qcom_ethqos_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
@@ -847,6 +1002,7 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	ethqos->phy_mode = plat_dat->phy_interface;
+	ethqos->speed = SPEED_10000;
 	switch (ethqos->phy_mode) {
 	case PHY_INTERFACE_MODE_RGMII:
 	case PHY_INTERFACE_MODE_RGMII_ID:
@@ -858,6 +1014,10 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	case PHY_INTERFACE_MODE_SGMII:
 		plat_dat->fix_mac_speed = ethqos_fix_mac_speed_sgmii;
 		plat_dat->mac_finish = ethqos_mac_finish_serdes;
+		break;
+	case PHY_INTERFACE_MODE_USXGMII:
+	case PHY_INTERFACE_MODE_10GBASER:
+		plat_dat->fix_mac_speed = ethqos_fix_mac_speed_usxgmii;
 		break;
 	default:
 		dev_err(dev, "Unsupported phy mode %s\n",
@@ -876,6 +1036,7 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	ethqos->num_rgmii_por = data->num_rgmii_por;
 	ethqos->rgmii_config_loopback_en = data->rgmii_config_loopback_en;
 	ethqos->has_emac_ge_3 = data->has_emac_ge_3;
+	ethqos->has_io_macro_ge_4 = data->has_io_macro_ge_4;
 	ethqos->needs_sgmii_loopback = data->needs_sgmii_loopback;
 
 	if (data->num_noc_clks) {
@@ -918,9 +1079,16 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	plat_dat->set_clk_tx_rate = ethqos_set_clk_tx_rate;
 	plat_dat->dump_debug_regs = rgmii_dump;
 	plat_dat->ptp_clk_freq_config = ethqos_ptp_clk_freq_config;
-	plat_dat->core_type = DWMAC_CORE_GMAC4;
+	plat_dat->core_type = data->has_hdma ? DWMAC_CORE_XGMAC : DWMAC_CORE_GMAC4;
 	if (ethqos->has_emac_ge_3)
 		plat_dat->dwmac4_addrs = &data->dwmac4_addrs;
+	if (data->dwxgmac_addrs.dma_even_chan_base)
+		plat_dat->dwxgmac_addrs = &data->dwxgmac_addrs;
+	plat_dat->has_hdma = data->has_hdma;
+	if (data->has_hdma)
+		qcom_ethqos_hdma_cfg(plat_dat, data);
+	if (data->axi_clk_rate)
+		plat_dat->clk_ref_rate = data->axi_clk_rate;
 	plat_dat->pmt = true;
 	if (of_property_read_bool(np, "snps,tso"))
 		plat_dat->flags |= STMMAC_FLAG_TSO_EN;
@@ -934,6 +1102,9 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		plat_dat->serdes_powerdown  = qcom_ethqos_serdes_powerdown;
 	}
 
+	plat_dat->pcs_init = qcom_ethqos_pcs_init;
+	plat_dat->select_pcs = qcom_ethqos_select_pcs;
+
 	/* Enable TSO on queue0 and enable TBS on rest of the queues */
 	for (i = 1; i < plat_dat->tx_queues_to_use; i++)
 		plat_dat->tx_queues_cfg[i].tbs_en = 1;
@@ -941,8 +1112,53 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	return devm_stmmac_pltfr_probe(pdev, plat_dat, &stmmac_res);
 }
 
+static const struct ethqos_emac_por emac_nord_por[] = {
+	{ .offset = RGMII_IO_MACRO_CONFIG,    .value = 0x00C04D03 },
+	{ .offset = SDCC_HC_REG_DLL_CONFIG,   .value = 0x2004642C },
+	{ .offset = RGMII_IO_MACRO_CONFIG2,   .value = 0x00222060 },
+	{ .offset = RGMII_IO_MACRO_SCRATCH_2, .value = 0x4c },
+};
+
+/*
+ * Nord has 12 TX/RX VDMAs.  VDMAs 0-9 are enabled (10 queues); 10-11 are
+ * offline.  The hardware requires a non-trivial VDMA->TC / VDMA->PDMA mapping:
+ * TX VDMAs 0-3 share TC 0 and PDMAs 0-3; VDMAs 6-9 share PDMA 6 on TCs 3-6.
+ * Derived from the downstream base-devicetree seca-ethernet.dtsi.
+ */
+static const u8 nord_tx_vdma_tc_map[]   = { 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 7 };
+static const u8 nord_rx_vdma_tc_map[]   = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 };
+static const u8 nord_tx_vdma_pdma_map[] = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 };
+static const u8 nord_rx_vdma_pdma_map[] = { 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 7 };
+
+static const struct ethqos_emac_driver_data emac_nord_data = {
+	.rgmii_por = emac_nord_por,
+	.num_rgmii_por = ARRAY_SIZE(emac_nord_por),
+	.dma_addr_width = 40,
+	.link_clk_name = "phyaux",
+	.needs_sgmii_loopback = true,
+	.has_hdma = true,
+	.has_io_macro_ge_4 = true,
+	.axi_clk_rate = 380000000,
+	.tx_vdma_tc_map   = nord_tx_vdma_tc_map,
+	.rx_vdma_tc_map   = nord_rx_vdma_tc_map,
+	.tx_vdma_pdma_map = nord_tx_vdma_pdma_map,
+	.rx_vdma_pdma_map = nord_rx_vdma_pdma_map,
+	.total_vdma       = ARRAY_SIZE(nord_tx_vdma_tc_map),
+	.dwxgmac_addrs = {
+		.dma_even_chan_base = 0x00008500,
+		.dma_odd_chan_base  = 0x00008580,
+		.dma_chan_offset    = 0x00001000,
+		.mtl_chan_base      = 0x00008000,
+		.mtl_chan_offset    = 0x00001000,
+		.timestamp_base     = 0x00007000,
+		.pps_base           = 0x00007080,
+		.pps_offset         = 0x10,
+	},
+};
+
 static const struct of_device_id qcom_ethqos_match[] = {
-	{ .compatible = "qcom,qcs404-ethqos", .data = &emac_v2_3_0_data},
+	{ .compatible = "qcom,nord-ethqos",    .data = &emac_nord_data },
+	{ .compatible = "qcom,qcs404-ethqos",  .data = &emac_v2_3_0_data },
 	{ .compatible = "qcom,sa8775p-ethqos", .data = &emac_v4_0_0_data},
 	{ .compatible = "qcom,sc8280xp-ethqos", .data = &emac_v3_0_0_data},
 	{ .compatible = "qcom,shikra-ethqos", .data = &shikra_data},
