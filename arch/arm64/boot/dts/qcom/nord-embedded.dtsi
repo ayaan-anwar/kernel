@@ -921,6 +921,13 @@
 			 <&apps_smmu_2 0x1208 0x0>,
 			 <&apps_smmu_2 0x1209 0x0>,
 			 <&apps_smmu_2 0x120a 0x0>;
+		interconnects = <&hscnoc MASTER_APPSS_PROC QCOM_ICC_TAG_ALWAYS
+				 &config_noc SLAVE_PS_ETH_0 QCOM_ICC_TAG_ALWAYS>,
+				<&aggre2_noc_tile MASTER_EMAC_0 QCOM_ICC_TAG_ALWAYS
+				 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
+				<&hscnoc MASTER_APPSS_PROC QCOM_ICC_TAG_ALWAYS
+				 &config_noc SLAVE_AHB2PHY_ETH_0 QCOM_ICC_TAG_ALWAYS>;
+		interconnect-names = "cpu-mac", "mac-mem", "ahb2phy";
 		pcs-handle = <&xpcs0>;
 		phys = <&serdes0>;
 		phy-names = "serdes";
@@ -1041,6 +1048,13 @@
 			 <&apps_smmu_2 0x11c8 0x2>,
 			 <&apps_smmu_2 0x11c9 0x8>,
 			 <&apps_smmu_2 0x11ca 0x2>;
+		interconnects = <&hscnoc MASTER_APPSS_PROC QCOM_ICC_TAG_ALWAYS
+				 &config_noc SLAVE_PS_ETH_1 QCOM_ICC_TAG_ALWAYS>,
+				<&aggre2_noc_tile MASTER_EMAC_1 QCOM_ICC_TAG_ALWAYS
+				 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
+				<&hscnoc MASTER_APPSS_PROC QCOM_ICC_TAG_ALWAYS
+				 &config_noc SLAVE_AHB2PHY_ETH_1 QCOM_ICC_TAG_ALWAYS>;
+		interconnect-names = "cpu-mac", "mac-mem", "ahb2phy";
 		pcs-handle = <&xpcs1>;
 		phys = <&serdes1>;
 		phy-names = "serdes";

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2018-19, Linaro Limited
 
+#include <linux/interconnect.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_net.h>
@@ -23,7 +24,7 @@
 #define RGMII_IO_MACRO_CONFIG2		0x1C
 #define RGMII_IO_MACRO_DEBUG1		0x20
 #define EMAC_SYSTEM_LOW_POWER_DEBUG	0x28
-#define RGMII_IO_MACRO_SCRATCH_2	0x24
+#define RGMII_IO_MACRO_SCRATCH_2	0x44
 #define EMAC_WRAPPER_SGMII_PHY_CNTRL1	0xf4
 
 /* IO macro generation 4 (USXGMII / 10GBaseR) */
@@ -147,8 +148,13 @@ struct qcom_ethqos {
 	struct platform_device *pdev;
 	void __iomem *rgmii_base;
 	struct clk *link_clk;
+	struct clk *eee_clk;
 	struct phy *serdes_phy;
 	phy_interface_t phy_mode;
+
+	struct icc_path *icc_cpu_mac;
+	struct icc_path *icc_mac_mem;
+	struct icc_path *icc_ahb2phy;
 
 	const struct ethqos_emac_por *rgmii_por;
 	unsigned int num_rgmii_por;
@@ -821,9 +827,37 @@ static int ethqos_clks_config(void *priv, bool enabled)
 	int ret = 0;
 
 	if (enabled) {
+		ret = icc_set_bw(ethqos->icc_cpu_mac, 0, Bps_to_icc(1 * 1000 * 1000));
+		if (ret) {
+			dev_err(&ethqos->pdev->dev, "cpu-mac icc vote failed\n");
+			return ret;
+		}
+
+		ret = icc_set_bw(ethqos->icc_mac_mem, 0, Bps_to_icc(1250 * 1000 * 1000ULL));
+		if (ret) {
+			dev_err(&ethqos->pdev->dev, "mac-mem icc vote failed\n");
+			icc_set_bw(ethqos->icc_cpu_mac, 0, 0);
+			return ret;
+		}
+
+		ret = icc_set_bw(ethqos->icc_ahb2phy, 0, Bps_to_icc(1 * 1000 * 1000));
+		if (ret) {
+			dev_err(&ethqos->pdev->dev, "ahb2phy icc vote failed\n");
+			icc_set_bw(ethqos->icc_mac_mem, 0, 0);
+			icc_set_bw(ethqos->icc_cpu_mac, 0, 0);
+			return ret;
+		}
+
 		ret = clk_prepare_enable(ethqos->link_clk);
 		if (ret) {
 			dev_err(&ethqos->pdev->dev, "link_clk enable failed\n");
+			return ret;
+		}
+
+		ret = clk_prepare_enable(ethqos->eee_clk);
+		if (ret) {
+			dev_err(&ethqos->pdev->dev, "eee_clk enable failed\n");
+			clk_disable_unprepare(ethqos->link_clk);
 			return ret;
 		}
 
@@ -833,6 +867,7 @@ static int ethqos_clks_config(void *priv, bool enabled)
 			if (ret) {
 				dev_err(&ethqos->pdev->dev,
 					"NOC clocks enable failed: %d\n", ret);
+				clk_disable_unprepare(ethqos->eee_clk);
 				clk_disable_unprepare(ethqos->link_clk);
 				return ret;
 			}
@@ -849,7 +884,11 @@ static int ethqos_clks_config(void *priv, bool enabled)
 		if (ethqos->num_noc_clks)
 			clk_bulk_disable_unprepare(ethqos->num_noc_clks,
 						   ethqos->noc_clks);
+		clk_disable_unprepare(ethqos->eee_clk);
 		clk_disable_unprepare(ethqos->link_clk);
+		icc_set_bw(ethqos->icc_ahb2phy, 0, 0);
+		icc_set_bw(ethqos->icc_mac_mem, 0, 0);
+		icc_set_bw(ethqos->icc_cpu_mac, 0, 0);
 	}
 
 	return ret;
@@ -1050,6 +1089,11 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(ethqos->link_clk),
 				     "Failed to get link_clk\n");
 
+	ethqos->eee_clk = devm_clk_get_optional(dev, "eee");
+	if (IS_ERR(ethqos->eee_clk))
+		return dev_err_probe(dev, PTR_ERR(ethqos->eee_clk),
+				     "Failed to get eee_clk\n");
+
 	ret = ethqos_clks_config(ethqos, true);
 	if (ret)
 		return ret;
@@ -1062,6 +1106,21 @@ static int qcom_ethqos_probe(struct platform_device *pdev)
 	if (IS_ERR(ethqos->serdes_phy))
 		return dev_err_probe(dev, PTR_ERR(ethqos->serdes_phy),
 				     "Failed to get serdes phy\n");
+
+	ethqos->icc_cpu_mac = devm_of_icc_get(dev, "cpu-mac");
+	if (IS_ERR(ethqos->icc_cpu_mac))
+		return dev_err_probe(dev, PTR_ERR(ethqos->icc_cpu_mac),
+				     "Failed to get cpu-mac interconnect\n");
+
+	ethqos->icc_mac_mem = devm_of_icc_get(dev, "mac-mem");
+	if (IS_ERR(ethqos->icc_mac_mem))
+		return dev_err_probe(dev, PTR_ERR(ethqos->icc_mac_mem),
+				     "Failed to get mac-mem interconnect\n");
+
+	ethqos->icc_ahb2phy = devm_of_icc_get(dev, "ahb2phy");
+	if (IS_ERR(ethqos->icc_ahb2phy))
+		return dev_err_probe(dev, PTR_ERR(ethqos->icc_ahb2phy),
+				     "Failed to get ahb2phy interconnect\n");
 
 	ethqos_set_clk_tx_rate(ethqos, NULL, plat_dat->phy_interface,
 			       SPEED_1000);
