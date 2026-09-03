@@ -12,6 +12,14 @@ config PCS_XPCS
 	  This module provides a driver and helper functions for Synopsys
 	  DesignWare XPCS controllers.
 
+config PCS_XPCS_QCOM
+	tristate "Qualcomm XPCS platform driver"
+	depends on PCS_XPCS
+	depends on OF && (ARCH_QCOM || COMPILE_TEST)
+	help
+	  Platform driver for the Qualcomm SA8797P (Nord) XPCS, which is
+	  memory-mapped over APB.  Supports USXGMII and 10GBASE-R modes.
+
 config PCS_LYNX
 	tristate
 	help
