@@ -51,40 +51,6 @@
 #define PCS_SGMIIPHY_READY	BIT(7)
 #define COM_PLL_LOCKED		BIT(1)
 
-/*
- * TCSR QREF CXO routing registers (EMAC0 SerDes).
- * Physical addresses verified against IPCAT nordschleife_2.0.
- * Exposed as "tcsr" reg-name in the DT node.
- */
-#define TCSR_CXO_REFGEN_BIAS_SEL	0x040
-#define TCSR_QREFS_CXO0_RPT0_CONFIG	0x000
-#define TCSR_QREFS_CXO0_TX0_CONFIG	0x004
-#define TCSR_QREFS_CXO0_RX3_CONFIG	0x008
-#define TCSR_QREFS_CXO0_RX2_CONFIG	0x00c
-#define TCSR_QREFS_CXO0_RPT2_CONFIG	0x010
-#define TCSR_QREFS_CXO0_RX4_CONFIG	0x014
-#define TCSR_QREFS_CXO0_RX0_CONFIG	0x018
-#define TCSR_QREFS_CXO0_RPT1_CONFIG	0x01c
-#define TCSR_QREFS_CXO0_RPT4_CONFIG	0x020
-#define TCSR_QREFS_CXO0_RPT3_CONFIG	0x02c
-#define TCSR_QREFS_CXO0_RPT5_CONFIG	0x030
-#define TCSR_QREFS_CXO0_RPT6_CONFIG	0x034
-#define TCSR_QREFS_CXO0_RX1_CONFIG	0x038
-#define TCSR_QREFS_CXO0_RPT7_CONFIG	0x03c
-#define TCSR_QREFS_CXO0_RX5_CONFIG	0x078
-#define TCSR_QREFS_CXO0_TX1_CONFIG	0x07c
-
-/*
- * TLMM PHY QREF routing registers.
- * The window covers both PHY0 (EMAC0) and PHY1 (EMAC1).
- * PHY0 sub-block at +0x1000, PHY1 sub-block at +0x2000.
- * Exposed as "tlmm" reg-name in the DT node.
- */
-#define TLMM_QREF_PHY_SEL_0		0x0000
-#define TLMM_PHY0_QREF_TX_RPT_SEL	0x1000
-#define TLMM_PHY0_QREF_RX_SEL		0x1004
-#define TLMM_PHY0_QREF_ENABLE		0x1008
-
 /* Regulator peak load currents (µA) */
 #define USXGMII_VDDA_0P9_UA		40210
 #define USXGMII_VDDA_1P2_UA		12520
@@ -107,8 +73,6 @@ struct qcom_serdes_data {
 	struct clk_bulk_data	clks[3];
 	struct regulator	*vdda_0p9;
 	struct regulator	*vdda_1p2;
-	void __iomem		*tcsr_base;
-	void __iomem		*tlmm_base;
 };
 
 /* ------------------------------------------------------------------ */
@@ -439,52 +403,6 @@ static void usxgmii_init_10g(struct regmap *rm)
 }
 
 /* ------------------------------------------------------------------ */
-/* USXGMII QREF routing (TCSR + TLMM)                                 */
-/* ------------------------------------------------------------------ */
-
-static void usxgmii_qref_init(struct device *dev,
-			       void __iomem *tc, void __iomem *tl)
-{
-	/* Step 1: bias select + PHY0 QREF enable */
-	writel(0x01,   tc + TCSR_CXO_REFGEN_BIAS_SEL);
-	writel(0xFFFF, tl + TLMM_PHY0_QREF_TX_RPT_SEL);
-	writel(0xFF,   tl + TLMM_PHY0_QREF_RX_SEL);
-	writel(0x01,   tl + TLMM_PHY0_QREF_ENABLE);
-	msleep(10);
-
-	/* Step 2: QREFS CXO_0 consumer config */
-	writel(0x3807, tc + TCSR_QREFS_CXO0_TX0_CONFIG);
-	writel(0x2807, tc + TCSR_QREFS_CXO0_TX1_CONFIG);
-	writel(0x43,   tc + TCSR_QREFS_CXO0_RX0_CONFIG);
-	writel(0x01,   tc + TCSR_QREFS_CXO0_RX1_CONFIG);
-	writel(0x01,   tc + TCSR_QREFS_CXO0_RX2_CONFIG);
-	writel(0x01,   tc + TCSR_QREFS_CXO0_RX3_CONFIG);
-	writel(0x01,   tc + TCSR_QREFS_CXO0_RX4_CONFIG);
-	writel(0x01,   tc + TCSR_QREFS_CXO0_RX5_CONFIG);
-	writel(0x03,   tc + TCSR_QREFS_CXO0_RPT0_CONFIG);
-	writel(0x03,   tc + TCSR_QREFS_CXO0_RPT1_CONFIG);
-	writel(0x03,   tc + TCSR_QREFS_CXO0_RPT2_CONFIG);
-	writel(0x03,   tc + TCSR_QREFS_CXO0_RPT3_CONFIG);
-	writel(0x03,   tc + TCSR_QREFS_CXO0_RPT4_CONFIG);
-	msleep(10);
-
-	/* Step 3: PHY0 routing select */
-	writel(0x06, tl + TLMM_QREF_PHY_SEL_0);
-	msleep(10);
-
-	dev_dbg(dev, "TCSR BIAS_SEL=0x%x TX0=0x%x RX0=0x%x RPT0=0x%x\n",
-		 readl(tc + TCSR_CXO_REFGEN_BIAS_SEL),
-		 readl(tc + TCSR_QREFS_CXO0_TX0_CONFIG),
-		 readl(tc + TCSR_QREFS_CXO0_RX0_CONFIG),
-		 readl(tc + TCSR_QREFS_CXO0_RPT0_CONFIG));
-	dev_dbg(dev, "TLMM PHY0 TX_RPT=0x%x RX=0x%x EN=0x%x SEL0=0x%x\n",
-		 readl(tl + TLMM_PHY0_QREF_TX_RPT_SEL),
-		 readl(tl + TLMM_PHY0_QREF_RX_SEL),
-		 readl(tl + TLMM_PHY0_QREF_ENABLE),
-		 readl(tl + TLMM_QREF_PHY_SEL_0));
-}
-
-/* ------------------------------------------------------------------ */
 /* SGMII phy_ops                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -634,14 +552,6 @@ static int usxgmii_power_on(struct phy *phy)
 	if (ret)
 		goto err_clks;
 
-	/*
-	 * QREF routing is only wired for PHY0 (EMAC0).  The TCSR/TLMM
-	 * mappings are NULL for PHY1 until that instance is brought up.
-	 * This logic will be moved to TZ firmware in a future change.
-	 */
-	if (data->tcsr_base && data->tlmm_base)
-		usxgmii_qref_init(&phy->dev, data->tcsr_base, data->tlmm_base);
-
 	usleep_range(2000, 4000);
 
 	ret = usxgmii_calibrate(phy);
@@ -738,21 +648,6 @@ static int qcom_serdes_eth_probe(struct platform_device *pdev)
 
 	if (cfg->usxgmii) {
 		struct resource *r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-
-		/*
-		 * QREF routing is PHY0-specific (EMAC0 at 0x088F8000).
-		 * Use raw ioremap — these addresses are shared with TZ and
-		 * must not go through the resource reservation system.
-		 * This will be moved to TZ firmware in a future change.
-		 */
-		if (r && r->start == 0x088f8000UL) {
-			data->tcsr_base = devm_ioremap(dev, 0x01fd5000UL, 0x1000);
-			if (!data->tcsr_base)
-				return -ENOMEM;
-			data->tlmm_base = devm_ioremap(dev, 0x0f1d8000UL, 0x12000);
-			if (!data->tlmm_base)
-				return -ENOMEM;
-		}
 
 		phy = devm_phy_create(dev, NULL, &usxgmii_ops);
 		if (IS_ERR(phy))
