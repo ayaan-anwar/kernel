@@ -76,6 +76,45 @@ static const struct snd_soc_dapm_route talos_lyra_dapm_routes[] = {
         {"Speaker", NULL, "SPKR"},
 };
 
+static const struct snd_soc_dapm_widget draco_dapm_widgets[] = {
+	SND_SOC_DAPM_HP("Headphone", NULL),
+	SND_SOC_DAPM_MIC("Headset Mic12", NULL),
+	SND_SOC_DAPM_MIC("Headset Mic56", NULL),
+	SND_SOC_DAPM_MIC("Headset Mic34", NULL),
+	SND_SOC_DAPM_SPK("Receiver", NULL),
+	SND_SOC_DAPM_SPK("Speaker", NULL),
+};
+
+static const struct snd_soc_dapm_route draco_dapm_routes[] = {
+	{"IN12", NULL, "Headset Mic12"},
+	{"Headset Mic12", NULL, "MICBIAS"},
+	{"IN34", NULL, "Headset Mic34"},
+	{"Headset Mic34", NULL, "MICBIAS"},
+	{"IN56", NULL, "Headset Mic56"},
+	{"Headset Mic56", NULL, "MICBIAS"},
+	{"Headphone", NULL, "HPL"},
+	{"Headphone", NULL, "HPR"},
+	{"Receiver", NULL, "RCVL"},
+	{"Receiver", NULL, "RCVR"},
+	{"Speaker", NULL, "SPKL"},
+	{"Speaker", NULL, "SPKR"},
+	{"VA DMIC0", NULL, "vdd-micb"},
+	{"VA DMIC1", NULL, "vdd-micb"},
+	{"VA DMIC2", NULL, "vdd-micb"},
+	{"VA DMIC3", NULL, "vdd-micb"},
+	{"VA DMIC4", NULL, "vdd-micb"},
+	{"VA DMIC5", NULL, "vdd-micb"},
+};
+
+static const struct snd_kcontrol_new draco_max98090_controls[] = {
+	SOC_DAPM_PIN_SWITCH("Headset Mic12"),
+	SOC_DAPM_PIN_SWITCH("Headset Mic34"),
+	SOC_DAPM_PIN_SWITCH("Headset Mic56"),
+	SOC_DAPM_PIN_SWITCH("Headphone"),
+	SOC_DAPM_PIN_SWITCH("Receiver"),
+	SOC_DAPM_PIN_SWITCH("Speaker"),
+};
+
 static const struct snd_soc_dapm_widget shikra_cqm_dapm_widgets[] = {
 	SND_SOC_DAPM_HP("Headphone Jack", NULL),
 	SND_SOC_DAPM_MIC("Mic Jack", NULL),
@@ -617,6 +656,19 @@ static const struct qcom_snd_soc_common qcs6490_priv_data = {
 	.wcd_jack = true,
 };
 
+static const struct qcom_snd_soc_common draco_priv_data = {
+	.driver_name = "qcs8300",
+	.dapm_widgets = draco_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(draco_dapm_widgets),
+	.dapm_routes = draco_dapm_routes,
+	.num_dapm_routes = ARRAY_SIZE(draco_dapm_routes),
+	.controls = draco_max98090_controls,
+	.num_controls = ARRAY_SIZE(draco_max98090_controls),
+	.codec_dai_fmt = SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_I2S |
+			 SND_SOC_DAIFMT_BC_FC,
+	.codec_sysclk_set = true,
+};
+
 static const struct qcom_snd_soc_common qcs8275_priv_data = {
 	.driver_name = "qcs8300",
 	.dapm_widgets = max98090_dapm_widgets,
@@ -730,6 +782,7 @@ static const struct of_device_id snd_sc8280xp_dt_match[] = {
 	{ .compatible = "qcom,qcs8275-sndcard", .data = &qcs8275_priv_data },
 	{ .compatible = "qcom,qcs9075-sndcard", .data = &qcs9100_priv_data },
 	{ .compatible = "qcom,qcs9100-sndcard", .data = &qcs9100_priv_data },
+	{ .compatible = "qcom,qcs8300-draco-sndcard", .data = &draco_priv_data },
 	{ .compatible = "qcom,sc8280xp-sndcard", .data = &sc8280xp_priv_data },
 	{ .compatible = "qcom,shikra-cqm-sndcard", .data = &shikra_cqm_priv_data },
 	{ .compatible = "qcom,shikra-cqs-sndcard", .data = &shikra_cqs_priv_data },
