@@ -457,6 +457,7 @@ properties:
               - arduino,monza
               - qcom,monaco-ac-evk
               - qcom,monaco-evk
+              - qcom,monaco-draco-evk
               - qcom,qcs8300-ride
           - const: qcom,qcs8300
 
