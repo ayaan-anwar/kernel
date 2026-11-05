@@ -7814,6 +7814,8 @@ void stmmac_dvr_remove(struct device *dev)
 	pm_runtime_get_sync(dev);
 
 	unregister_netdev(ndev);
+	/* The PHY may be powered off when the MDIO bus is unregistered below. */
+	pinctrl_pm_select_sleep_state(dev);
 
 #ifdef CONFIG_DEBUG_FS
 	stmmac_exit_fs(ndev);
